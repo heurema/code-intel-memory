@@ -206,6 +206,56 @@ if [ "$CD_ROWS" -ne 1 ]; then
 fi
 echo "OK: query_graph count(DISTINCT f.label) returned 1 aggregate row"
 
+# 3d-funcs: scalar / introspection functions (full Cypher suite, Tier 1)
+cyp_first_cell() {
+  # $1 = query; echoes rows[0][0] (or empty)
+  cli query_graph "{\"project\":\"$PROJECT\",\"query\":\"$1\"}" |
+    python3 -c "import json,sys; d=json.loads(sys.stdin.read()); rows=d.get('rows',[]); print(rows[0][0] if rows and rows[0] else '')" 2>/dev/null || echo ""
+}
+
+# labels(n) → JSON list like ["Function"]
+LBLV=$(cyp_first_cell 'MATCH (f:Function) RETURN labels(f) AS l LIMIT 1')
+case "$LBLV" in
+  '['*) echo "OK: query_graph labels(f) = $LBLV" ;;
+  *) echo "FAIL: query_graph labels(f) returned '$LBLV' (expected a [\"...\"] list)"; exit 1 ;;
+esac
+
+# type(r) → relationship type
+TYPV=$(cyp_first_cell 'MATCH (f:Function)-[r]->(g) RETURN type(r) AS t LIMIT 1')
+if [ -z "$TYPV" ]; then
+  echo "FAIL: query_graph type(r) returned empty"; exit 1
+fi
+echo "OK: query_graph type(r) = $TYPV"
+
+# id(n) → numeric identity
+IDV=$(cyp_first_cell 'MATCH (f:Function) RETURN id(f) AS i LIMIT 1')
+case "$IDV" in
+  ''|*[!0-9]*) echo "FAIL: query_graph id(f) returned non-numeric '$IDV'"; exit 1 ;;
+  *) echo "OK: query_graph id(f) = $IDV" ;;
+esac
+
+# properties(n) → JSON object
+PROPV=$(cyp_first_cell 'MATCH (f:Function) RETURN properties(f) AS p LIMIT 1')
+case "$PROPV" in
+  '{'*) echo "OK: query_graph properties(f) is a JSON object" ;;
+  *) echo "FAIL: query_graph properties(f) returned '$PROPV'"; exit 1 ;;
+esac
+
+# toInteger() cast in projection
+TIV=$(cyp_first_cell 'MATCH (f:Function) RETURN toInteger(f.start_line) AS n LIMIT 1')
+case "$TIV" in
+  ''|*[!0-9-]*) echo "FAIL: query_graph toInteger(f.start_line) returned non-integer '$TIV'"; exit 1 ;;
+  *) echo "OK: query_graph toInteger(f.start_line) = $TIV" ;;
+esac
+
+# =~ regex match in WHERE
+CYPHER_RX=$(cli query_graph "{\"project\":\"$PROJECT\",\"query\":\"MATCH (f:Function) WHERE f.name =~ \\\".+\\\" RETURN f.name\"}")
+RX_ROWS=$(echo "$CYPHER_RX" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(len(d.get('rows',[])))" 2>/dev/null || echo "0")
+if [ "$RX_ROWS" -lt 1 ]; then
+  echo "FAIL: query_graph WHERE =~ regex returned 0 rows"; echo "$CYPHER_RX"; exit 1
+fi
+echo "OK: query_graph WHERE f.name =~ regex returned $RX_ROWS row(s)"
+
 # 3e: delete_project cleanup
 cli delete_project "{\"project\":\"$PROJECT\"}" > /dev/null
 

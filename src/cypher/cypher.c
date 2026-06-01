@@ -1246,6 +1246,34 @@ static cbm_case_expr_t *parse_case_expr(parser_t *p) {
 /* Parse a single RETURN/WITH item (aggregate, string func, CASE, or plain var.prop).
  * Returns 0 on success, -1 on error. */
 /* Parse var[.prop] into item->variable and item->property. Returns -1 on error. */
+/* ASCII case-insensitive string equality. */
+static bool cyp_ci_eq(const char *a, const char *b) {
+    if (!a || !b) {
+        return false;
+    }
+    for (; *a && *b; a++, b++) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) {
+            return false;
+        }
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+/* Canonical name for a single-argument scalar / entity-introspection function
+ * invoked by identifier — labels/type/id/keys/properties and the numeric/bool
+ * casts toInteger/toFloat/toBoolean — or NULL if unrecognised (case-insensitive).
+ * toLower/toUpper/toString are separate keyword tokens handled elsewhere. */
+static const char *scalar_func_canonical(const char *s) {
+    static const char *const names[] = {"labels",    "type",    "id",        "keys", "properties",
+                                        "toInteger", "toFloat", "toBoolean", NULL};
+    for (int i = 0; names[i]; i++) {
+        if (cyp_ci_eq(s, names[i])) {
+            return names[i];
+        }
+    }
+    return NULL;
+}
+
 static int parse_var_dot_prop(parser_t *p, cbm_return_item_t *item) {
     const cbm_token_t *var = expect(p, TOK_IDENT);
     if (!var) {
@@ -1258,6 +1286,31 @@ static int parse_var_dot_prop(parser_t *p, cbm_return_item_t *item) {
             item->property = heap_strdup(prop->text);
         }
     }
+    return 0;
+}
+
+/* True if the cursor is at `IDENT(` where IDENT is a supported scalar function. */
+static bool is_named_func_call(parser_t *p) {
+    if (!check(p, TOK_IDENT) || p->pos + SKIP_ONE >= p->count) {
+        return false;
+    }
+    if (p->tokens[p->pos + SKIP_ONE].type != TOK_LPAREN) {
+        return false;
+    }
+    return scalar_func_canonical(peek(p)->text) != NULL;
+}
+
+/* Parse a single-argument scalar / introspection call: labels(n), type(r),
+ * id(n), keys(n), properties(n), toInteger(n.start_line), ... */
+static int parse_named_func_item(parser_t *p, cbm_return_item_t *item) {
+    const char *canon = scalar_func_canonical(peek(p)->text);
+    advance(p); /* consume the function name */
+    expect(p, TOK_LPAREN);
+    if (parse_var_dot_prop(p, item) < 0) {
+        return CBM_NOT_FOUND;
+    }
+    expect(p, TOK_RPAREN);
+    item->func = heap_strdup(canon);
     return 0;
 }
 
@@ -1304,6 +1357,8 @@ static int parse_return_item(parser_t *p, cbm_return_item_t *item) {
         rc = parse_aggregate_item(p, item);
     } else if (is_string_func_tok(peek(p)->type)) {
         rc = parse_string_func_item(p, item);
+    } else if (is_named_func_call(p)) {
+        rc = parse_named_func_item(p, item);
     } else {
         rc = parse_var_dot_prop(p, item);
     }
@@ -2339,6 +2394,39 @@ static const char *apply_string_func(const char *func, const char *val, char *bu
     if (strcmp(func, "toString") == 0) {
         return val; /* already strings */
     }
+    if (strcmp(func, "toInteger") == 0) {
+        char *end = NULL;
+        long long v = strtoll(val, &end, CBM_DECIMAL_BASE);
+        if (end == val) {
+            /* Not an integer literal — accept a float string and truncate. */
+            char *fend = NULL;
+            double d = strtod(val, &fend);
+            if (fend == val) {
+                return ""; /* non-numeric → null */
+            }
+            v = (long long)d;
+        }
+        snprintf(buf, buf_sz, "%lld", v);
+        return buf;
+    }
+    if (strcmp(func, "toFloat") == 0) {
+        char *end = NULL;
+        double d = strtod(val, &end);
+        if (end == val) {
+            return ""; /* non-numeric → null */
+        }
+        snprintf(buf, buf_sz, "%g", d);
+        return buf;
+    }
+    if (strcmp(func, "toBoolean") == 0) {
+        if (cyp_ci_eq(val, "true")) {
+            return "true";
+        }
+        if (cyp_ci_eq(val, "false")) {
+            return "false";
+        }
+        return ""; /* not a boolean → null */
+    }
     return val;
 }
 
@@ -2778,14 +2866,96 @@ static void rb_free(result_builder_t *rb) {
 
 /* ── Get projection value for a binding + return item ─────────── */
 
+/* Build a JSON list of a node's non-null property keys: keys(n). */
+static const char *node_keys_list(const cbm_node_t *n, char *buf, size_t buf_sz) {
+    const struct {
+        const char *k;
+        bool present;
+    } ks[] = {
+        {"name", n->name && n->name[0]},
+        {"qualified_name", n->qualified_name && n->qualified_name[0]},
+        {"label", n->label && n->label[0]},
+        {"file_path", n->file_path && n->file_path[0]},
+        {"start_line", n->start_line > 0},
+        {"end_line", n->end_line > 0},
+    };
+    size_t pos = 0;
+    bool first = true;
+    if (pos < buf_sz - SKIP_ONE) {
+        buf[pos++] = '[';
+    }
+    for (size_t i = 0; i < sizeof(ks) / sizeof(ks[0]) && pos < buf_sz - SKIP_ONE; i++) {
+        if (!ks[i].present) {
+            continue;
+        }
+        int w = snprintf(buf + pos, buf_sz - pos, "%s\"%s\"", first ? "" : ",", ks[i].k);
+        if (w < 0 || (size_t)w >= buf_sz - pos) {
+            break;
+        }
+        pos += (size_t)w;
+        first = false;
+    }
+    if (pos < buf_sz - SKIP_ONE) {
+        buf[pos++] = ']';
+    }
+    buf[pos] = '\0';
+    return buf;
+}
+
 static const char *project_item(binding_t *b, cbm_return_item_t *item, char *func_buf,
                                 size_t buf_sz) {
     if (item->kase) {
         return eval_case_expr(item->kase, b);
     }
+    /* Entity-introspection functions operate on the bound node/edge itself,
+     * not on a scalar property value. */
+    if (item->func) {
+        if (strcmp(item->func, "labels") == 0) {
+            cbm_node_t *n = binding_get(b, item->variable);
+            if (n && n->label) {
+                snprintf(func_buf, buf_sz, "[\"%s\"]", n->label);
+                return func_buf;
+            }
+            return "[]";
+        }
+        if (strcmp(item->func, "type") == 0) {
+            cbm_edge_t *e = binding_get_edge(b, item->variable);
+            return (e && e->type) ? e->type : "";
+        }
+        if (strcmp(item->func, "id") == 0) {
+            cbm_node_t *n = binding_get(b, item->variable);
+            if (n) {
+                snprintf(func_buf, buf_sz, "%lld", (long long)n->id);
+                return func_buf;
+            }
+            cbm_edge_t *e = binding_get_edge(b, item->variable);
+            if (e) {
+                snprintf(func_buf, buf_sz, "%lld", (long long)e->id);
+                return func_buf;
+            }
+            return "";
+        }
+        if (strcmp(item->func, "keys") == 0) {
+            cbm_node_t *n = binding_get(b, item->variable);
+            return n ? node_keys_list(n, func_buf, buf_sz) : "[]";
+        }
+        if (strcmp(item->func, "properties") == 0) {
+            cbm_node_t *n = binding_get(b, item->variable);
+            if (n) {
+                return n->properties_json ? n->properties_json : "{}";
+            }
+            cbm_edge_t *e = binding_get_edge(b, item->variable);
+            if (e) {
+                return e->properties_json ? e->properties_json : "{}";
+            }
+            return "{}";
+        }
+    }
     const char *raw = binding_get_virtual(b, item->variable, item->property);
-    if (item->func && (strcmp(item->func, "toLower") == 0 || strcmp(item->func, "toUpper") == 0 ||
-                       strcmp(item->func, "toString") == 0)) {
+    if (item->func &&
+        (strcmp(item->func, "toLower") == 0 || strcmp(item->func, "toUpper") == 0 ||
+         strcmp(item->func, "toString") == 0 || strcmp(item->func, "toInteger") == 0 ||
+         strcmp(item->func, "toFloat") == 0 || strcmp(item->func, "toBoolean") == 0)) {
         return apply_string_func(item->func, raw, func_buf, buf_sz);
     }
     return raw;

@@ -31,13 +31,13 @@ static int write_json(const char *path, const char *json) {
 /* ── Tests: project config ───────────────────────────────────────── */
 
 TEST(userconfig_project_basic) {
-    /* Write a .codebase-memory.json in a temp dir */
+    /* Write a .code-intel-memory.json in a temp dir */
     char dir[256];
     snprintf(dir, sizeof(dir), "%s/uctest_proj_basic", cbm_tmpdir());
     cbm_mkdir_p(dir, 0755); /* from compat_fs.h via compat.h */
 
     char proj[512];
-    snprintf(proj, sizeof(proj), "%s/.codebase-memory.json", dir);
+    snprintf(proj, sizeof(proj), "%s/.code-intel-memory.json", dir);
     ASSERT_EQ(
         write_json(proj, "{\"extra_extensions\":{\".blade.php\":\"php\",\".mjs\":\"javascript\"}}"),
         0);
@@ -54,6 +54,24 @@ TEST(userconfig_project_basic) {
     PASS();
 }
 
+TEST(userconfig_legacy_project_fallback) {
+    char dir[256];
+    snprintf(dir, sizeof(dir), "%s/uctest_legacy_proj", cbm_tmpdir());
+    cbm_mkdir_p(dir, 0755);
+
+    char proj[512];
+    snprintf(proj, sizeof(proj), "%s/.codebase-memory.json", dir);
+    ASSERT_EQ(write_json(proj, "{\"extra_extensions\":{\".blade.php\":\"php\"}}"), 0);
+
+    cbm_userconfig_t *cfg = cbm_userconfig_load(dir);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cbm_userconfig_lookup(cfg, ".blade.php"), CBM_LANG_PHP);
+
+    cbm_userconfig_free(cfg);
+    remove(proj);
+    PASS();
+}
+
 /* ── Tests: global config ────────────────────────────────────────── */
 
 TEST(userconfig_global_via_env) {
@@ -63,7 +81,7 @@ TEST(userconfig_global_via_env) {
     snprintf(cfg_dir, sizeof(cfg_dir), "%s/uctest_global_xdg", cbm_tmpdir());
 
     char app_dir[512];
-    snprintf(app_dir, sizeof(app_dir), "%s/codebase-memory-mcp", cfg_dir);
+    snprintf(app_dir, sizeof(app_dir), "%s/code-intel-memory", cfg_dir);
     cbm_mkdir_p(app_dir, 0755);
 
     char global_path[768];
@@ -106,7 +124,7 @@ TEST(userconfig_project_wins_over_global) {
     snprintf(xdg_dir, sizeof(xdg_dir), "%s/uctest_priority_xdg", cbm_tmpdir());
 
     char app_dir[512];
-    snprintf(app_dir, sizeof(app_dir), "%s/codebase-memory-mcp", xdg_dir);
+    snprintf(app_dir, sizeof(app_dir), "%s/code-intel-memory", xdg_dir);
     cbm_mkdir_p(app_dir, 0755);
 
     char global_path[768];
@@ -120,7 +138,7 @@ TEST(userconfig_project_wins_over_global) {
     cbm_mkdir_p(proj_dir, 0755);
 
     char proj_path[512];
-    snprintf(proj_path, sizeof(proj_path), "%s/.codebase-memory.json", proj_dir);
+    snprintf(proj_path, sizeof(proj_path), "%s/.code-intel-memory.json", proj_dir);
     ASSERT_EQ(
         write_json(proj_path, "{\"extra_extensions\":{\".xyz\":\"rust\"}}"),
         0);
@@ -147,7 +165,7 @@ TEST(userconfig_unknown_lang_skipped) {
     cbm_mkdir_p(dir, 0755);
 
     char proj[512];
-    snprintf(proj, sizeof(proj), "%s/.codebase-memory.json", dir);
+    snprintf(proj, sizeof(proj), "%s/.code-intel-memory.json", dir);
     /* "klingon" is not a valid language; ".wasm" should be silently skipped */
     ASSERT_EQ(
         write_json(proj,
@@ -189,7 +207,7 @@ TEST(userconfig_integration_override) {
     cbm_mkdir_p(dir, 0755);
 
     char proj[512];
-    snprintf(proj, sizeof(proj), "%s/.codebase-memory.json", dir);
+    snprintf(proj, sizeof(proj), "%s/.code-intel-memory.json", dir);
     ASSERT_EQ(
         write_json(proj, "{\"extra_extensions\":{\".blade.php\":\"php\"}}"),
         0);
@@ -224,6 +242,7 @@ TEST(userconfig_free_null) {
 
 SUITE(userconfig) {
     RUN_TEST(userconfig_project_basic);
+    RUN_TEST(userconfig_legacy_project_fallback);
     RUN_TEST(userconfig_global_via_env);
     RUN_TEST(userconfig_project_wins_over_global);
     RUN_TEST(userconfig_unknown_lang_skipped);

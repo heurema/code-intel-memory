@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codebase-memory-mcp"
+name = "code-intel-memory"
 version = "0.8.1"
 description = "Fast code intelligence engine for AI coding agents — single static binary MCP server"
 readme = "README.md"
@@ -24,12 +24,13 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/DeusData/codebase-memory-mcp"
-Repository = "https://github.com/DeusData/codebase-memory-mcp"
-Issues = "https://github.com/DeusData/codebase-memory-mcp/issues"
+Homepage = "https://github.com/heurema/code-intel-memory"
+Repository = "https://github.com/heurema/code-intel-memory"
+Issues = "https://github.com/heurema/code-intel-memory/issues"
 
 [project.scripts]
-codebase-memory-mcp = "codebase_memory_mcp:main"
+code-intel-memory = "code_intel_memory:main"
+codebase-memory-mcp = "code_intel_memory:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/codebase_memory_mcp"]
+packages = ["src/code_intel_memory"]

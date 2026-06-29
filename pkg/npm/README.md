@@ -1,9 +1,9 @@
-# codebase-memory-mcp
+# code-intel-memory
 
-[![npm](https://img.shields.io/npm/v/codebase-memory-mcp?style=flat&color=blue)](https://www.npmjs.com/package/codebase-memory-mcp)
-[![GitHub Release](https://img.shields.io/github/v/release/DeusData/codebase-memory-mcp?style=flat&color=blue)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
-[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/DeusData/codebase-memory-mcp/blob/main/LICENSE)
-[![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
+[![npm](https://img.shields.io/npm/v/code-intel-memory?style=flat&color=blue)](https://www.npmjs.com/package/code-intel-memory)
+[![GitHub Release](https://img.shields.io/github/v/release/heurema/code-intel-memory?style=flat&color=blue)](https://github.com/heurema/code-intel-memory/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/heurema/code-intel-memory/blob/main/LICENSE)
+[![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/heurema/code-intel-memory/releases/latest)
 
 **The fastest and most efficient code intelligence engine for AI coding agents.** Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a single static binary — this package downloads and runs it automatically.
 
@@ -12,18 +12,18 @@ High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-si
 ## Installation
 
 ```bash
-npm install -g codebase-memory-mcp
+npm install -g code-intel-memory
 ```
 
 The binary for your platform is downloaded automatically at install time. Then configure your coding agents:
 
 ```bash
-codebase-memory-mcp install
+code-intel-memory install
 ```
 
 Restart your agent. Say **"Index this project"** — done.
 
-## Why codebase-memory-mcp
+## Why code-intel-memory
 
 - **Extreme indexing speed** — Linux kernel (28M LOC, 75K files) in 3 minutes. RAM-first pipeline with LZ4 compression and in-memory SQLite.
 - **Plug and play** — single static binary for macOS (arm64/amd64), Linux (arm64/amd64), and Windows (amd64). No Docker, no runtime dependencies, no API keys.
@@ -43,11 +43,11 @@ Restart your agent. Say **"Index this project"** — done.
 ## Usage
 
 ```bash
-codebase-memory-mcp install          # configure all detected coding agents
-codebase-memory-mcp --version
-codebase-memory-mcp --help
-codebase-memory-mcp update           # update to latest release
-codebase-memory-mcp uninstall        # remove agent configs
+code-intel-memory install          # configure all detected coding agents
+code-intel-memory --version
+code-intel-memory --help
+code-intel-memory update           # update to latest release
+code-intel-memory uninstall        # remove agent configs
 ```
 
 ### CLI Mode
@@ -55,10 +55,10 @@ codebase-memory-mcp uninstall        # remove agent configs
 Every MCP tool is also available directly from the command line:
 
 ```bash
-codebase-memory-mcp cli index_repository '{"repo_path": "/path/to/repo"}'
-codebase-memory-mcp cli search_graph '{"name_pattern": ".*Handler.*", "label": "Function"}'
-codebase-memory-mcp cli trace_call_path '{"function_name": "main", "direction": "both"}'
-codebase-memory-mcp cli get_architecture '{}'
+code-intel-memory cli index_repository '{"repo_path": "/path/to/repo"}'
+code-intel-memory cli search_graph '{"name_pattern": ".*Handler.*", "label": "Function"}'
+code-intel-memory cli trace_call_path '{"function_name": "main", "direction": "both"}'
+code-intel-memory cli get_architecture '{}'
 ```
 
 ## MCP Tools
@@ -83,7 +83,7 @@ Benchmarked on Apple M3 Pro:
 
 ## Full Documentation
 
-See [github.com/DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) for the full README including all MCP tools, configuration options, graph data model, and language support details.
+See [github.com/heurema/code-intel-memory](https://github.com/heurema/code-intel-memory) for the full README including all MCP tools, configuration options, graph data model, and language support details.
 
 ## License
 

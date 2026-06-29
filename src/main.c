@@ -1,5 +1,5 @@
 /*
- * main.c — Entry point for codebase-memory-mcp.
+ * main.c — Entry point for code-intel-memory.
  *
  * Modes:
  *   (default)       Run as MCP server on stdin/stdout (JSON-RPC 2.0)
@@ -180,7 +180,7 @@ static int watcher_index_fn(const char *project_name, const char *root_path, voi
 
 /* ── CLI mode ───────────────────────────────────────────────────── */
 
-#define CLI_USAGE "Usage: codebase-memory-mcp cli [--progress] [--json] <tool_name> [json_args]\n"
+#define CLI_USAGE "Usage: code-intel-memory cli [--progress] [--json] <tool_name> [json_args]\n"
 
 /* Extract text content from MCP tool result envelope and print it.
  * MCP results: {"content":[{"type":"text","text":"..."}],"isError":...}
@@ -280,16 +280,16 @@ static int run_cli(int argc, char **argv) {
 /* ── Help ───────────────────────────────────────────────────────── */
 
 static void print_help(void) {
-    printf("codebase-memory-mcp %s\n\n", CBM_VERSION);
+    printf("code-intel-memory %s\n\n", CBM_VERSION);
     printf("Usage:\n");
-    printf("  codebase-memory-mcp              Run MCP server on stdio\n");
-    printf("  codebase-memory-mcp cli <tool> [json]  Run a single tool\n");
-    printf("  codebase-memory-mcp install [-y|-n] [--force] [--dry-run]\n");
-    printf("  codebase-memory-mcp uninstall [-y|-n] [--dry-run]\n");
-    printf("  codebase-memory-mcp update [-y|-n]\n");
-    printf("  codebase-memory-mcp config <list|get|set|reset>\n");
-    printf("  codebase-memory-mcp --version    Print version\n");
-    printf("  codebase-memory-mcp --help       Print this help\n");
+    printf("  code-intel-memory              Run MCP server on stdio\n");
+    printf("  code-intel-memory cli <tool> [json]  Run a single tool\n");
+    printf("  code-intel-memory install [-y|-n] [--force] [--dry-run]\n");
+    printf("  code-intel-memory uninstall [-y|-n] [--dry-run]\n");
+    printf("  code-intel-memory update [-y|-n]\n");
+    printf("  code-intel-memory config <list|get|set|reset>\n");
+    printf("  code-intel-memory --version    Print version\n");
+    printf("  code-intel-memory --help       Print this help\n");
     printf("\nUI options:\n");
     printf("  --ui=true    Enable HTTP graph visualization (persisted)\n");
     printf("  --ui=false   Disable HTTP graph visualization (persisted)\n");
@@ -316,7 +316,7 @@ static int handle_subcommand(int argc, char **argv) {
     }
     for (int i = SKIP_ONE; i < argc; i++) {
         if (strcmp(argv[i], "--version") == 0) {
-            printf("codebase-memory-mcp %s\n", CBM_VERSION);
+            printf("code-intel-memory %s\n", CBM_VERSION);
             return 0;
         }
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -447,9 +447,9 @@ int main(int argc, char **argv) {
      * and which build to use (#350). */
     if (explicit_ui_enable && CBM_EMBEDDED_FILE_COUNT == 0) {
         (void)fprintf(stderr,
-                      "codebase-memory-mcp: --ui requested, but this binary was built without the "
+                      "code-intel-memory: --ui requested, but this binary was built without the "
                       "embedded UI, so the HTTP server will not start.\n"
-                      "Use the UI release asset (codebase-memory-mcp-ui) or rebuild with: "
+                      "Use the UI release asset (code-intel-memory-ui) or rebuild with: "
                       "make -f Makefile.cbm cbm-with-ui\n");
     }
 

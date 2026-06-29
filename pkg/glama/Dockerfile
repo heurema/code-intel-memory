@@ -1,6 +1,6 @@
 # Glama MCP directory (glama.ai) check image — NOT required to run the tool.
 #
-# codebase-memory-mcp needs NO Docker to run. This image exists only so Glama
+# code-intel-memory needs NO Docker to run. This image exists only so Glama
 # can build a sandbox, launch the stdio MCP server, and run its introspection
 # checks, which power the directory's score badge. The same image is exercised
 # locally and in CI by pkg/glama/verify.sh to guard against drift.
@@ -14,13 +14,13 @@ FROM debian:bookworm-slim AS fetch
 ARG TARGETARCH
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
- && curl -fsSL "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download/codebase-memory-mcp-linux-${TARGETARCH}-portable.tar.gz" \
-      | tar -xz -C /tmp codebase-memory-mcp LICENSE THIRD_PARTY_NOTICES.md \
- && chmod +x /tmp/codebase-memory-mcp \
+ && curl -fsSL "https://github.com/heurema/code-intel-memory/releases/latest/download/code-intel-memory-linux-${TARGETARCH}-portable.tar.gz" \
+      | tar -xz -C /tmp code-intel-memory LICENSE THIRD_PARTY_NOTICES.md \
+ && chmod +x /tmp/code-intel-memory \
  && rm -rf /var/lib/apt/lists/*
 
 FROM debian:bookworm-slim
-COPY --from=fetch /tmp/codebase-memory-mcp /usr/local/bin/codebase-memory-mcp
-COPY --from=fetch /tmp/LICENSE /tmp/THIRD_PARTY_NOTICES.md /usr/share/doc/codebase-memory-mcp/
+COPY --from=fetch /tmp/code-intel-memory /usr/local/bin/code-intel-memory
+COPY --from=fetch /tmp/LICENSE /tmp/THIRD_PARTY_NOTICES.md /usr/share/doc/code-intel-memory/
 ENV CBM_CACHE_DIR=/tmp/cbm
-ENTRYPOINT ["codebase-memory-mcp"]
+ENTRYPOINT ["code-intel-memory"]

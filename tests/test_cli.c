@@ -2,9 +2,9 @@
  * test_cli.c — Tests for CLI subcommands: install, uninstall, update, version.
  *
  * Port of Go test files:
- *   - cmd/codebase-memory-mcp/cli_test.go (11 tests)
- *   - cmd/codebase-memory-mcp/install_test.go (24 tests)
- *   - cmd/codebase-memory-mcp/update_test.go (5 tests)
+ *   - cmd/code-intel-memory/cli_test.go (11 tests)
+ *   - cmd/code-intel-memory/install_test.go (24 tests)
+ *   - cmd/code-intel-memory/update_test.go (5 tests)
  *   - internal/selfupdate/selfupdate_test.go (7 tests)
  *
  * Total: 47 Go tests → 47 C tests
@@ -528,7 +528,7 @@ TEST(cli_remove_old_monolithic_skill) {
     char skills_dir[512];
     snprintf(skills_dir, sizeof(skills_dir), "%s/.claude/skills", tmpdir);
 
-    /* Create old monolithic skill */
+    /* Create old monolithic skills */
     char old_dir[1024];
     snprintf(old_dir, sizeof(old_dir), "%s/codebase-memory-mcp", skills_dir);
     test_mkdirp(old_dir);
@@ -536,11 +536,19 @@ TEST(cli_remove_old_monolithic_skill) {
     snprintf(old_file, sizeof(old_file), "%s/SKILL.md", old_dir);
     write_test_file(old_file, "old skill");
 
+    char old_dir2[1024];
+    snprintf(old_dir2, sizeof(old_dir2), "%s/codebase-memory", skills_dir);
+    test_mkdirp(old_dir2);
+    char old_file2[1024];
+    snprintf(old_file2, sizeof(old_file2), "%s/SKILL.md", old_dir2);
+    write_test_file(old_file2, "old skill");
+
     bool removed = cbm_remove_old_monolithic_skill(skills_dir, false);
     ASSERT_TRUE(removed);
 
     struct stat st;
     ASSERT(stat(old_dir, &st) != 0);
+    ASSERT(stat(old_dir2, &st) != 0);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -550,7 +558,7 @@ TEST(cli_skill_files_content) {
     /* Consolidated skill: all 4 former skills merged into one. */
     const cbm_skill_t *sk = cbm_get_skills();
     ASSERT_EQ(CBM_SKILL_COUNT, 1);
-    ASSERT(strcmp(sk[0].name, "codebase-memory") == 0);
+    ASSERT(strcmp(sk[0].name, "code-intel-memory") == 0);
 
     /* Exploring capabilities */
     ASSERT(strstr(sk[0].content, "search_graph") != NULL);
@@ -599,14 +607,14 @@ TEST(cli_editor_mcp_install) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/.cursor/mcp.json", tmpdir);
 
-    int rc = cbm_install_editor_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_install_editor_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
     ASSERT(strstr(data, "mcpServers") != NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
-    ASSERT(strstr(data, "/usr/local/bin/codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
+    ASSERT(strstr(data, "/usr/local/bin/code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -622,17 +630,17 @@ TEST(cli_editor_mcp_idempotent) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/.cursor/mcp.json", tmpdir);
 
-    cbm_install_editor_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
-    int rc = cbm_install_editor_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    cbm_install_editor_mcp("/usr/local/bin/code-intel-memory", configpath);
+    int rc = cbm_install_editor_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     /* Should still parse as valid JSON with only 1 server */
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
-    /* Count occurrences of "codebase-memory-mcp" (should be exactly 1 in mcpServers) */
+    /* Count occurrences of "code-intel-memory" (should be exactly 1 in mcpServers) */
     int count = 0;
     const char *p = data;
-    while ((p = strstr(p, "\"codebase-memory-mcp\"")) != NULL) {
+    while ((p = strstr(p, "\"code-intel-memory\"")) != NULL) {
         count++;
         p += 20;
     }
@@ -661,12 +669,41 @@ TEST(cli_editor_mcp_preserves_others) {
     write_test_file(configpath,
                     "{\"mcpServers\": {\"other-server\": {\"command\": \"/usr/bin/other\"}}}");
 
-    cbm_install_editor_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    cbm_install_editor_mcp("/usr/local/bin/code-intel-memory", configpath);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
     ASSERT(strstr(data, "other-server") != NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
+TEST(cli_editor_mcp_removes_legacy_server) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char configpath[512];
+    snprintf(configpath, sizeof(configpath), "%s/.cursor/mcp.json", tmpdir);
+    char dir[512];
+    snprintf(dir, sizeof(dir), "%s/.cursor", tmpdir);
+    test_mkdirp(dir);
+
+    write_test_file(configpath,
+                    "{\"mcpServers\":{\"codebase-memory-mcp\":{\"command\":\"/old/bin\"},"
+                    "\"other-server\":{\"command\":\"/usr/bin/other\"}}}");
+
+    int rc = cbm_install_editor_mcp("/usr/local/bin/code-intel-memory", configpath);
+    ASSERT_EQ(rc, 0);
+
+    const char *data = read_test_file(configpath);
+    ASSERT_NOT_NULL(data);
+    ASSERT(strstr(data, "\"codebase-memory-mcp\"") == NULL);
+    ASSERT(strstr(data, "\"code-intel-memory\"") != NULL);
+    ASSERT(strstr(data, "other-server") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -682,14 +719,14 @@ TEST(cli_editor_mcp_uninstall) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/.cursor/mcp.json", tmpdir);
 
-    cbm_install_editor_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    cbm_install_editor_mcp("/usr/local/bin/code-intel-memory", configpath);
     int rc = cbm_remove_editor_mcp(configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
-    /* codebase-memory-mcp should be removed */
-    ASSERT(strstr(data, "\"codebase-memory-mcp\"") == NULL);
+    /* code-intel-memory should be removed */
+    ASSERT(strstr(data, "\"code-intel-memory\"") == NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -706,13 +743,13 @@ TEST(cli_gemini_mcp_install) {
     snprintf(configpath, sizeof(configpath), "%s/.gemini/settings.json", tmpdir);
 
     /* Gemini uses same mcpServers format as Cursor */
-    int rc = cbm_install_editor_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_install_editor_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
     ASSERT(strstr(data, "mcpServers") != NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -732,7 +769,7 @@ TEST(cli_vscode_mcp_install) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/Code/User/mcp.json", tmpdir);
 
-    int rc = cbm_install_vscode_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_install_vscode_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
@@ -740,8 +777,8 @@ TEST(cli_vscode_mcp_install) {
     ASSERT(strstr(data, "\"servers\"") != NULL);
     ASSERT(strstr(data, "\"type\"") != NULL);
     ASSERT(strstr(data, "\"stdio\"") != NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
-    ASSERT(strstr(data, "/usr/local/bin/codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
+    ASSERT(strstr(data, "/usr/local/bin/code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -757,13 +794,13 @@ TEST(cli_vscode_mcp_uninstall) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/Code/User/mcp.json", tmpdir);
 
-    cbm_install_vscode_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    cbm_install_vscode_mcp("/usr/local/bin/code-intel-memory", configpath);
     int rc = cbm_remove_vscode_mcp(configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
-    ASSERT(strstr(data, "\"codebase-memory-mcp\"") == NULL);
+    ASSERT(strstr(data, "\"code-intel-memory\"") == NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -783,7 +820,7 @@ TEST(cli_zed_mcp_install) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/.config/zed/settings.json", tmpdir);
 
-    int rc = cbm_install_zed_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_install_zed_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
@@ -791,8 +828,8 @@ TEST(cli_zed_mcp_install) {
     ASSERT(strstr(data, "\"context_servers\"") != NULL);
     ASSERT(strstr(data, "\"command\"") != NULL);
     ASSERT(strstr(data, "\"args\"") != NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
-    ASSERT(strstr(data, "/usr/local/bin/codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
+    ASSERT(strstr(data, "/usr/local/bin/code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -814,7 +851,7 @@ TEST(cli_zed_mcp_preserves_settings) {
     /* Pre-existing Zed settings */
     write_test_file(configpath, "{\"theme\": \"One Dark\", \"vim_mode\": true}");
 
-    cbm_install_zed_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    cbm_install_zed_mcp("/usr/local/bin/code-intel-memory", configpath);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
@@ -823,7 +860,7 @@ TEST(cli_zed_mcp_preserves_settings) {
     ASSERT(strstr(data, "vim_mode") != NULL);
     /* MCP server added */
     ASSERT(strstr(data, "context_servers") != NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -839,13 +876,13 @@ TEST(cli_zed_mcp_uninstall) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/.config/zed/settings.json", tmpdir);
 
-    cbm_install_zed_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    cbm_install_zed_mcp("/usr/local/bin/code-intel-memory", configpath);
     int rc = cbm_remove_zed_mcp(configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
-    ASSERT(strstr(data, "\"codebase-memory-mcp\"") == NULL);
+    ASSERT(strstr(data, "\"code-intel-memory\"") == NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -873,7 +910,7 @@ TEST(cli_zed_mcp_jsonc_comments) {
                                 "  \"vim_mode\": true,\n" /* trailing comma */
                                 "}\n");
 
-    int rc = cbm_install_zed_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_install_zed_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
@@ -882,7 +919,7 @@ TEST(cli_zed_mcp_jsonc_comments) {
     ASSERT(strstr(data, "One Dark") != NULL);
     ASSERT(strstr(data, "vim_mode") != NULL);
     /* MCP server added */
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
     ASSERT(strstr(data, "context_servers") != NULL);
 
     test_rmdir_r(tmpdir);
@@ -1111,7 +1148,7 @@ TEST(cli_extract_binary_from_targz) {
     const char *content = "fake binary content";
     int gz_len;
     unsigned char *gz =
-        create_test_targz("codebase-memory-mcp-linux-amd64", (const unsigned char *)content,
+        create_test_targz("code-intel-memory-linux-amd64", (const unsigned char *)content,
                           (int)strlen(content), &gz_len);
     ASSERT_NOT_NULL(gz);
 
@@ -1234,7 +1271,7 @@ TEST(cli_extract_binary_from_zip) {
     const char *content = "#!/bin/sh\necho test\n";
     int zip_len = 0;
     unsigned char *zip = create_test_zip_stored(
-        "codebase-memory-mcp", (const unsigned char *)content, (int)strlen(content), &zip_len);
+        "code-intel-memory", (const unsigned char *)content, (int)strlen(content), &zip_len);
     ASSERT_NOT_NULL(zip);
 
     int out_len = 0;
@@ -1265,7 +1302,7 @@ TEST(cli_extract_binary_from_zip_path_traversal) {
     const char *content = "malicious";
     int zip_len = 0;
     unsigned char *zip =
-        create_test_zip_stored("../../etc/codebase-memory-mcp", (const unsigned char *)content,
+        create_test_zip_stored("../../etc/code-intel-memory", (const unsigned char *)content,
                                (int)strlen(content), &zip_len);
     ASSERT_NOT_NULL(zip);
 
@@ -1592,7 +1629,7 @@ TEST(cli_install_plan_receipt_no_mutation_issue388) {
     snprintf(dir, sizeof(dir), "%s/.codex", tmpdir);
     test_mkdirp(dir);
 
-    char *json = cbm_build_install_plan_json(tmpdir, "/usr/local/bin/codebase-memory-mcp");
+    char *json = cbm_build_install_plan_json(tmpdir, "/usr/local/bin/code-intel-memory");
     ASSERT_NOT_NULL(json);
     ASSERT(strstr(json, "agent.install.plan.v1") != NULL);
     ASSERT(strstr(json, "writes_started") != NULL);
@@ -1819,13 +1856,13 @@ TEST(cli_upsert_codex_mcp_fresh) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/config.toml", tmpdir);
 
-    int rc = cbm_upsert_codex_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_upsert_codex_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
-    ASSERT(strstr(data, "[mcp_servers.codebase-memory-mcp]") != NULL);
-    ASSERT(strstr(data, "/usr/local/bin/codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "[mcp_servers.code-intel-memory]") != NULL);
+    ASSERT(strstr(data, "/usr/local/bin/code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -1841,7 +1878,7 @@ TEST(cli_upsert_codex_mcp_existing) {
     snprintf(configpath, sizeof(configpath), "%s/config.toml", tmpdir);
     write_test_file(configpath, "model = \"gpt-4\"\n\n[other_setting]\nfoo = \"bar\"\n");
 
-    int rc = cbm_upsert_codex_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_upsert_codex_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
@@ -1850,7 +1887,7 @@ TEST(cli_upsert_codex_mcp_existing) {
     ASSERT(strstr(data, "model = \"gpt-4\"") != NULL);
     ASSERT(strstr(data, "[other_setting]") != NULL);
     /* Our entry added */
-    ASSERT(strstr(data, "[mcp_servers.codebase-memory-mcp]") != NULL);
+    ASSERT(strstr(data, "[mcp_servers.code-intel-memory]") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -1864,20 +1901,47 @@ TEST(cli_upsert_codex_mcp_replace) {
 
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/config.toml", tmpdir);
-    write_test_file(configpath, "[mcp_servers.codebase-memory-mcp]\n"
-                                "command = \"/old/path/codebase-memory-mcp\"\n"
+    write_test_file(configpath, "[mcp_servers.code-intel-memory]\n"
+                                "command = \"/old/path/code-intel-memory\"\n"
                                 "\n"
                                 "[other_setting]\nfoo = \"bar\"\n");
 
-    int rc = cbm_upsert_codex_mcp("/new/path/codebase-memory-mcp", configpath);
+    int rc = cbm_upsert_codex_mcp("/new/path/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
     /* Old path replaced */
     ASSERT(strstr(data, "/old/path") == NULL);
-    ASSERT(strstr(data, "/new/path/codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "/new/path/code-intel-memory") != NULL);
     /* Other settings preserved */
+    ASSERT(strstr(data, "[other_setting]") != NULL);
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
+TEST(cli_upsert_codex_mcp_removes_legacy_section) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codex-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char configpath[512];
+    snprintf(configpath, sizeof(configpath), "%s/config.toml", tmpdir);
+    write_test_file(configpath, "model = \"gpt-5\"\n\n"
+                                "[mcp_servers.codebase-memory-mcp]\n"
+                                "command = \"/old/path/codebase-memory-mcp\"\n\n"
+                                "[other_setting]\nfoo = \"bar\"\n");
+
+    int rc = cbm_upsert_codex_mcp("/new/path/code-intel-memory", configpath);
+    ASSERT_EQ(rc, 0);
+
+    const char *data = read_test_file(configpath);
+    ASSERT_NOT_NULL(data);
+    ASSERT(strstr(data, "[mcp_servers.codebase-memory-mcp]") == NULL);
+    ASSERT(strstr(data, "[mcp_servers.code-intel-memory]") != NULL);
+    ASSERT(strstr(data, "/new/path/code-intel-memory") != NULL);
     ASSERT(strstr(data, "[other_setting]") != NULL);
 
     test_rmdir_r(tmpdir);
@@ -1898,7 +1962,7 @@ TEST(cli_zed_mcp_uses_args_format) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/settings.json", tmpdir);
 
-    cbm_install_zed_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    cbm_install_zed_mcp("/usr/local/bin/code-intel-memory", configpath);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
@@ -1923,13 +1987,13 @@ TEST(cli_upsert_opencode_mcp_fresh) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/opencode.json", tmpdir);
 
-    int rc = cbm_upsert_opencode_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_upsert_opencode_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
-    ASSERT(strstr(data, "/usr/local/bin/codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
+    ASSERT(strstr(data, "/usr/local/bin/code-intel-memory") != NULL);
     ASSERT(strstr(data, "\"enabled\":true") != NULL || strstr(data, "\"enabled\": true") != NULL);
     /* command must be emitted as an array, not a string */
     ASSERT(strstr(data, "\"command\":[") != NULL || strstr(data, "\"command\": [") != NULL);
@@ -1951,13 +2015,13 @@ TEST(cli_upsert_opencode_mcp_existing) {
     snprintf(configpath, sizeof(configpath), "%s/opencode.json", tmpdir);
     write_test_file(configpath, "{\"mcp\":{\"other-server\":{\"command\":\"/usr/bin/other\"}}}");
 
-    int rc = cbm_upsert_opencode_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_upsert_opencode_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
     ASSERT(strstr(data, "other-server") != NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -1976,12 +2040,12 @@ TEST(cli_upsert_antigravity_mcp_fresh) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/mcp_config.json", tmpdir);
 
-    int rc = cbm_upsert_antigravity_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    int rc = cbm_upsert_antigravity_mcp("/usr/local/bin/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -1996,15 +2060,15 @@ TEST(cli_upsert_antigravity_mcp_replace) {
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/mcp_config.json", tmpdir);
     write_test_file(configpath,
-                    "{\"mcpServers\":{\"codebase-memory-mcp\":{\"command\":\"/old/path\"}}}");
+                    "{\"mcpServers\":{\"code-intel-memory\":{\"command\":\"/old/path\"}}}");
 
-    int rc = cbm_upsert_antigravity_mcp("/new/path/codebase-memory-mcp", configpath);
+    int rc = cbm_upsert_antigravity_mcp("/new/path/code-intel-memory", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
     ASSERT_NOT_NULL(data);
     ASSERT(strstr(data, "/old/path") == NULL);
-    ASSERT(strstr(data, "/new/path/codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "/new/path/code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -2028,8 +2092,8 @@ TEST(cli_upsert_instructions_fresh) {
 
     const char *data = read_test_file(filepath);
     ASSERT_NOT_NULL(data);
-    ASSERT(strstr(data, "<!-- codebase-memory-mcp:start -->") != NULL);
-    ASSERT(strstr(data, "<!-- codebase-memory-mcp:end -->") != NULL);
+    ASSERT(strstr(data, "<!-- code-intel-memory:start -->") != NULL);
+    ASSERT(strstr(data, "<!-- code-intel-memory:end -->") != NULL);
     ASSERT(strstr(data, "Hello world") != NULL);
 
     test_rmdir_r(tmpdir);
@@ -2055,7 +2119,7 @@ TEST(cli_upsert_instructions_existing) {
     ASSERT(strstr(data, "My Project Rules") != NULL);
     ASSERT(strstr(data, "Do the thing") != NULL);
     /* CMM section appended */
-    ASSERT(strstr(data, "codebase-memory-mcp:start") != NULL);
+    ASSERT(strstr(data, "code-intel-memory:start") != NULL);
     ASSERT(strstr(data, "search_graph") != NULL);
 
     test_rmdir_r(tmpdir);
@@ -2071,9 +2135,9 @@ TEST(cli_upsert_instructions_replace) {
     char filepath[512];
     snprintf(filepath, sizeof(filepath), "%s/AGENTS.md", tmpdir);
     write_test_file(filepath, "# Rules\n"
-                              "<!-- codebase-memory-mcp:start -->\n"
+                              "<!-- code-intel-memory:start -->\n"
                               "OLD CONTENT\n"
-                              "<!-- codebase-memory-mcp:end -->\n"
+                              "<!-- code-intel-memory:end -->\n"
                               "# Other stuff\n");
 
     int rc = cbm_upsert_instructions(filepath, "NEW CONTENT\n");
@@ -2110,7 +2174,7 @@ TEST(cli_upsert_instructions_no_duplicate) {
     /* Only one start marker */
     int count = 0;
     const char *p = data;
-    while ((p = strstr(p, "codebase-memory-mcp:start")) != NULL) {
+    while ((p = strstr(p, "code-intel-memory:start")) != NULL) {
         count++;
         p += 25;
     }
@@ -2132,9 +2196,9 @@ TEST(cli_remove_instructions) {
     char filepath[512];
     snprintf(filepath, sizeof(filepath), "%s/AGENTS.md", tmpdir);
     write_test_file(filepath, "# Rules\n"
-                              "<!-- codebase-memory-mcp:start -->\n"
+                              "<!-- code-intel-memory:start -->\n"
                               "CMM Content\n"
-                              "<!-- codebase-memory-mcp:end -->\n"
+                              "<!-- code-intel-memory:end -->\n"
                               "# Other\n");
 
     int rc = cbm_remove_instructions(filepath);
@@ -2143,7 +2207,7 @@ TEST(cli_remove_instructions) {
     const char *data = read_test_file(filepath);
     ASSERT_NOT_NULL(data);
     ASSERT(strstr(data, "CMM Content") == NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") == NULL);
+    ASSERT(strstr(data, "code-intel-memory") == NULL);
     ASSERT(strstr(data, "# Rules") != NULL);
     ASSERT(strstr(data, "# Other") != NULL);
 
@@ -2199,7 +2263,7 @@ TEST(cli_hook_gate_script_no_predictable_tmp_issue384) {
     if (!cbm_mkdtemp(tmpdir))
         FAIL("cbm_mkdtemp failed");
 
-    cbm_install_hook_gate_script(tmpdir, "/usr/local/bin/codebase-memory-mcp");
+    cbm_install_hook_gate_script(tmpdir, "/usr/local/bin/code-intel-memory");
 
     char script_path[512];
     snprintf(script_path, sizeof(script_path), "%s/.claude/hooks/cbm-code-discovery-gate", tmpdir);
@@ -2339,7 +2403,7 @@ TEST(cli_upsert_gemini_hook_fresh) {
     const char *data = read_test_file(settingspath);
     ASSERT_NOT_NULL(data);
     ASSERT(strstr(data, "BeforeTool") != NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -2363,7 +2427,7 @@ TEST(cli_upsert_gemini_hook_existing) {
     const char *data = read_test_file(settingspath);
     ASSERT_NOT_NULL(data);
     /* Our hook added */
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
     /* Existing hook preserved */
     ASSERT(strstr(data, "shell") != NULL);
 
@@ -2390,7 +2454,7 @@ TEST(cli_upsert_gemini_hook_replace) {
     const char *data = read_test_file(settingspath);
     ASSERT_NOT_NULL(data);
     ASSERT(strstr(data, "old-cmm") == NULL);
-    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+    ASSERT(strstr(data, "code-intel-memory") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -2411,7 +2475,7 @@ TEST(cli_remove_gemini_hooks) {
 
     const char *data = read_test_file(settingspath);
     ASSERT_NOT_NULL(data);
-    ASSERT(strstr(data, "codebase-memory-mcp") == NULL);
+    ASSERT(strstr(data, "code-intel-memory") == NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -2687,10 +2751,11 @@ SUITE(cli) {
     RUN_TEST(cli_skill_files_content);
     RUN_TEST(cli_codex_instructions);
 
-    /* Editor MCP: Cursor/Windsurf/Gemini (5 tests — install_test.go) */
+    /* Editor MCP: Cursor/Windsurf/Gemini (6 tests — install_test.go) */
     RUN_TEST(cli_editor_mcp_install);
     RUN_TEST(cli_editor_mcp_idempotent);
     RUN_TEST(cli_editor_mcp_preserves_others);
+    RUN_TEST(cli_editor_mcp_removes_legacy_server);
     RUN_TEST(cli_editor_mcp_uninstall);
     RUN_TEST(cli_gemini_mcp_install);
 
@@ -2758,10 +2823,11 @@ SUITE(cli) {
     RUN_TEST(cli_detect_agents_finds_kiro);
     RUN_TEST(cli_detect_agents_none_found);
 
-    /* Codex MCP config upsert (3 tests — group B) */
+    /* Codex MCP config upsert (4 tests — group B) */
     RUN_TEST(cli_upsert_codex_mcp_fresh);
     RUN_TEST(cli_upsert_codex_mcp_existing);
     RUN_TEST(cli_upsert_codex_mcp_replace);
+    RUN_TEST(cli_upsert_codex_mcp_removes_legacy_section);
 
     /* Zed MCP format fix (1 test — group B) */
     RUN_TEST(cli_zed_mcp_uses_args_format);

@@ -11,6 +11,7 @@
 
 #include <sys/stat.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -104,13 +105,13 @@ TEST(artifact_export_fast_roundtrip) {
 
     /* Verify artifact files exist */
     char zst[1024];
-    snprintf(zst, sizeof(zst), "%s/.codebase-memory/graph.db.zst", g_repo);
+    snprintf(zst, sizeof(zst), "%s/.code-intel-memory/graph.db.zst", g_repo);
     struct stat st;
     ASSERT_EQ(stat(zst, &st), 0);
     ASSERT_GT((int)st.st_size, 0);
 
     char meta[1024];
-    snprintf(meta, sizeof(meta), "%s/.codebase-memory/artifact.json", g_repo);
+    snprintf(meta, sizeof(meta), "%s/.code-intel-memory/artifact.json", g_repo);
     ASSERT_EQ(stat(meta, &st), 0);
 
     /* Import to a new path */
@@ -162,6 +163,34 @@ TEST(artifact_export_best_roundtrip) {
     PASS();
 }
 
+TEST(artifact_legacy_dir_import_fallback) {
+    setup_artifact_test();
+    create_test_db(g_db);
+
+    int rc = cbm_artifact_export(g_db, g_repo, "test-proj", CBM_ARTIFACT_FAST);
+    ASSERT_EQ(rc, 0);
+
+    char current_dir[1024];
+    snprintf(current_dir, sizeof(current_dir), "%s/.code-intel-memory", g_repo);
+    char legacy_dir[1024];
+    snprintf(legacy_dir, sizeof(legacy_dir), "%s/.codebase-memory", g_repo);
+    ASSERT_EQ(rename(current_dir, legacy_dir), 0);
+
+    ASSERT_TRUE(cbm_artifact_exists(g_repo));
+
+    char import_db[1024];
+    snprintf(import_db, sizeof(import_db), "%s/imported-legacy.db", g_tmpdir);
+    rc = cbm_artifact_import(g_repo, import_db);
+    ASSERT_EQ(rc, 0);
+
+    struct stat st;
+    ASSERT_EQ(stat(import_db, &st), 0);
+    ASSERT_GT((int)st.st_size, 0);
+
+    cleanup_dir(g_tmpdir);
+    PASS();
+}
+
 TEST(artifact_exists_check) {
     setup_artifact_test();
     create_test_db(g_db);
@@ -199,7 +228,7 @@ TEST(artifact_schema_version_mismatch) {
 
     /* Overwrite artifact.json with incompatible schema version */
     char meta[1024];
-    snprintf(meta, sizeof(meta), "%s/.codebase-memory/artifact.json", g_repo);
+    snprintf(meta, sizeof(meta), "%s/.code-intel-memory/artifact.json", g_repo);
     FILE *fp = fopen(meta, "w");
     ASSERT_NOT_NULL(fp);
     fprintf(fp, "{\"schema_version\": 999, \"original_size\": 1000}");
@@ -238,7 +267,7 @@ TEST(artifact_gitattributes_created) {
     cbm_artifact_export(g_db, g_repo, "test-proj", CBM_ARTIFACT_FAST);
 
     char ga[1024];
-    snprintf(ga, sizeof(ga), "%s/.codebase-memory/.gitattributes", g_repo);
+    snprintf(ga, sizeof(ga), "%s/.code-intel-memory/.gitattributes", g_repo);
     struct stat st;
     ASSERT_EQ(stat(ga, &st), 0);
 
@@ -251,7 +280,7 @@ TEST(artifact_export_rename_failure_logs_specific_error) {
     create_test_db(g_db);
 
     char art_dir[1024];
-    snprintf(art_dir, sizeof(art_dir), "%s/.codebase-memory", g_repo);
+    snprintf(art_dir, sizeof(art_dir), "%s/.code-intel-memory", g_repo);
     cbm_mkdir_p(art_dir, 0755);
 
     char zst[1024];
@@ -283,7 +312,7 @@ TEST(pipeline_persistence_export_failure_returns_error) {
     write_text_file(src, "int main(void) { return 0; }\n");
 
     char art_dir[1024];
-    snprintf(art_dir, sizeof(art_dir), "%s/.codebase-memory", g_repo);
+    snprintf(art_dir, sizeof(art_dir), "%s/.code-intel-memory", g_repo);
     cbm_mkdir_p(art_dir, 0755);
 
     char zst[1024];
@@ -321,6 +350,7 @@ TEST(artifact_null_safety) {
 SUITE(artifact) {
     RUN_TEST(artifact_export_fast_roundtrip);
     RUN_TEST(artifact_export_best_roundtrip);
+    RUN_TEST(artifact_legacy_dir_import_fallback);
     RUN_TEST(artifact_exists_check);
     RUN_TEST(artifact_commit_hash);
     RUN_TEST(artifact_schema_version_mismatch);

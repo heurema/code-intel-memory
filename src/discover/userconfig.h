@@ -2,9 +2,9 @@
  * userconfig.h — User-defined file extension → language mappings.
  *
  * Reads extra_extensions from two optional JSON config files:
- *   Global:  $XDG_CONFIG_HOME/codebase-memory-mcp/config.json
- *            (falls back to ~/.config/codebase-memory-mcp/config.json)
- *   Project: {repo_root}/.codebase-memory.json
+ *   Global:  $XDG_CONFIG_HOME/code-intel-memory/config.json
+ *            (falls back to ~/.config/code-intel-memory/config.json)
+ *   Project: {repo_root}/.code-intel-memory.json
  *
  * Project config wins over global. Unknown language values warn and are
  * skipped (fail-open). Missing files are silently ignored.

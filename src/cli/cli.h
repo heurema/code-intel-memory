@@ -1,7 +1,7 @@
 /*
  * cli.h — CLI subcommand handlers for install, uninstall, update, version.
  *
- * Port of Go cmd/codebase-memory-mcp/ install/update/config logic.
+ * Port of Go cmd/code-intel-memory/ install/update/config logic.
  *
  * Functions accept explicit paths (home_dir, binary_path) rather than
  * reading HOME internally, making them testable with temp directories.
@@ -63,7 +63,7 @@ int cbm_replace_binary(const char *path, const unsigned char *data, int len, int
 
 /* Skill name/content pair. */
 typedef struct {
-    const char *name;    /* e.g. "codebase-memory" */
+    const char *name;    /* e.g. "code-intel-memory" */
     const char *content; /* full SKILL.md content */
 } cbm_skill_t;
 
@@ -86,7 +86,7 @@ bool cbm_remove_old_monolithic_skill(const char *skills_dir, bool dry_run);
 /* ── Editor MCP config management ─────────────────────────────── */
 
 /* Install MCP server entry in Cursor/Windsurf/Gemini JSON config.
- * Format: { "mcpServers": { "codebase-memory-mcp": { "command": binary_path } } }
+ * Format: { "mcpServers": { "code-intel-memory": { "command": binary_path } } }
  * Preserves existing entries. Returns 0 on success. */
 int cbm_install_editor_mcp(const char *binary_path, const char *config_path);
 
@@ -95,7 +95,7 @@ int cbm_install_editor_mcp(const char *binary_path, const char *config_path);
 int cbm_remove_editor_mcp(const char *config_path);
 
 /* Install MCP server entry in VS Code JSON config.
- * Format: { "servers": { "codebase-memory-mcp": { "type": "stdio", "command": binary_path } } }
+ * Format: { "servers": { "code-intel-memory": { "type": "stdio", "command": binary_path } } }
  * Returns 0 on success. */
 int cbm_install_vscode_mcp(const char *binary_path, const char *config_path);
 
@@ -104,7 +104,7 @@ int cbm_install_vscode_mcp(const char *binary_path, const char *config_path);
 int cbm_remove_vscode_mcp(const char *config_path);
 
 /* Install MCP server entry in Zed settings.json.
- * Format: { "context_servers": { "codebase-memory-mcp": { "command": path, "args": [""] } } }
+ * Format: { "context_servers": { "code-intel-memory": { "command": path, "args": [""] } } }
  * Returns 0 on success. */
 int cbm_install_zed_mcp(const char *binary_path, const char *config_path);
 
@@ -157,13 +157,13 @@ int cbm_remove_antigravity_mcp(const char *config_path);
 
 /* ── Instructions file upsert ─────────────────────────────────── */
 
-/* Upsert a codebase-memory-mcp instruction section in a markdown file.
- * Uses <!-- codebase-memory-mcp:start --> / <!-- codebase-memory-mcp:end --> markers.
+/* Upsert a code-intel-memory instruction section in a markdown file.
+ * Uses <!-- code-intel-memory:start --> / <!-- code-intel-memory:end --> markers.
  * If markers exist, replaces content between them. Otherwise appends.
  * If file doesn't exist, creates it. Returns 0 on success. */
 int cbm_upsert_instructions(const char *path, const char *content);
 
-/* Remove the codebase-memory-mcp instruction section from a markdown file.
+/* Remove the code-intel-memory instruction section from a markdown file.
  * Returns 0 on success, 1 if not found. */
 int cbm_remove_instructions(const char *path);
 
@@ -216,19 +216,19 @@ const char *cbm_get_codex_instructions(void);
 
 /* ── Tar.gz extraction ────────────────────────────────────────── */
 
-/* Extract a binary named "codebase-memory-mcp*" from a tar.gz buffer.
+/* Extract a binary named "code-intel-memory*" from a tar.gz buffer.
  * Returns malloc'd binary content and sets *out_len.
  * Returns NULL on error. Caller must free. */
 unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data_len, int *out_len);
 
-/* Extract the codebase-memory-mcp binary from a zip archive in memory.
+/* Extract the code-intel-memory binary from a zip archive in memory.
  * Returns malloc'd binary content and sets *out_len.
  * Returns NULL on error. Caller must free. */
 unsigned char *cbm_extract_binary_from_zip(const unsigned char *data, int data_len, int *out_len);
 
 /* ── Index management ─────────────────────────────────────────── */
 
-/* List .db files in the cache directory (~/.cache/codebase-memory-mcp/).
+/* List .db files in the cache directory (~/.cache/code-intel-memory/).
  * Prints each file path to stdout. Returns count of .db files found. */
 int cbm_list_indexes(const char *home_dir);
 

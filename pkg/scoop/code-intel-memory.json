@@ -1,0 +1,36 @@
+{
+  "version": "0.8.1",
+  "description": "Fast code intelligence engine for AI coding agents — single static binary MCP server",
+  "homepage": "https://github.com/heurema/code-intel-memory",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/heurema/code-intel-memory/releases/download/v0.8.1/code-intel-memory-windows-amd64.zip",
+      "hash": "a602ad090ed3f49d86c55472f73f27ad7055222806a82358f2e08513e027f00f",
+      "bin": [
+        "code-intel-memory.exe",
+        [
+          "code-intel-memory.exe",
+          "codebase-memory-mcp"
+        ]
+      ]
+    }
+  },
+  "post_install": [
+    "& \"$dir\\code-intel-memory.exe\" install -y 2>&1 | Out-Null"
+  ],
+  "checkver": {
+    "github": "https://github.com/heurema/code-intel-memory"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/heurema/code-intel-memory/releases/download/v$version/code-intel-memory-windows-amd64.zip",
+        "hash": {
+          "url": "https://github.com/heurema/code-intel-memory/releases/download/v$version/checksums.txt",
+          "find": "([a-f0-9]{64})\\s+code-intel-memory-windows-amd64\\.zip"
+        }
+      }
+    }
+  }
+}

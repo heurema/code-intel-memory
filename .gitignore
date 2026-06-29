@@ -1,5 +1,6 @@
 # Binaries
 code-graph-mcp
+/code-intel-memory
 /codebase-memory-mcp
 bin/
 *.exe
@@ -30,6 +31,7 @@ Thumbs.db
 *.db
 *.db-wal
 *.db-shm
+.code-intel-memory/
 .codebase-memory/
 .ruff_cache/
 

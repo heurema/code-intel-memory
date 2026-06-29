@@ -1,5 +1,5 @@
 /*
- * hook_augment.c — `codebase-memory-mcp hook-augment`
+ * hook_augment.c — `code-intel-memory hook-augment`
  *
  * A non-blocking Claude Code PreToolUse augmenter. Reads the hook JSON from
  * stdin, and for Grep/Glob calls injects matching graph symbols as
@@ -200,7 +200,7 @@ static char *ha_format_context(const char *envelope, const char *token, bool *is
         return NULL;
     }
     int off = snprintf(text, 4096,
-                       "[codebase-memory] %zu graph symbol(s) match \"%s\" "
+                       "[code-intel-memory] %zu graph symbol(s) match \"%s\" "
                        "(structured context; your search results below are "
                        "unaffected):",
                        nres, token);

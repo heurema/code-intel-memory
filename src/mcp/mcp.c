@@ -288,7 +288,7 @@ static const tool_def_t TOOLS[] = {
      "\"description\":\"Projects to search for cross-repo links (cross-repo-intelligence mode). "
      "Use [\\\"*\\\"] for all indexed projects. Run list_projects to see available projects.\"},"
      "\"persistence\":{\"type\":\"boolean\",\"default\":false,\"description\":"
-     "\"Write compressed artifact to .codebase-memory/graph.db.zst for team sharing. "
+     "\"Write compressed artifact to .code-intel-memory/graph.db.zst for team sharing. "
      "Teammates can bootstrap from the artifact instead of full re-indexing.\"}"
      "},\"required\":[\"repo_path\"]}"},
 
@@ -521,7 +521,7 @@ char *cbm_mcp_initialize_response(const char *params_json) {
     yyjson_mut_obj_add_str(doc, root, "protocolVersion", version);
 
     yyjson_mut_val *impl = yyjson_mut_obj(doc);
-    yyjson_mut_obj_add_str(doc, impl, "name", "codebase-memory-mcp");
+    yyjson_mut_obj_add_str(doc, impl, "name", "code-intel-memory");
     yyjson_mut_obj_add_str(doc, impl, "version", "0.10.0");
     yyjson_mut_obj_add_val(doc, root, "serverInfo", impl);
 
@@ -1119,7 +1119,7 @@ static char *handle_get_graph_schema(cbm_mcp_server_t *srv, const char *args) {
     cbm_project_t proj_info = {0};
     if (cbm_store_get_project(store, project, &proj_info) == 0 && proj_info.root_path) {
         char adr_path[CBM_SZ_4K];
-        snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", proj_info.root_path);
+        snprintf(adr_path, sizeof(adr_path), "%s/.code-intel-memory/adr.md", proj_info.root_path);
         struct stat adr_st;
         bool adr_exists = (stat(adr_path, &adr_st) == 0);
         yyjson_mut_obj_add_bool(doc, root, "adr_present", adr_exists);
@@ -2758,7 +2758,7 @@ static bool build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *
     }
 
     char adr_path[CBM_SZ_4K];
-    snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", repo_path);
+    snprintf(adr_path, sizeof(adr_path), "%s/.code-intel-memory/adr.md", repo_path);
     struct stat adr_st;
     bool adr_exists = (stat(adr_path, &adr_st) == 0);
     yyjson_mut_obj_add_bool(doc, root, "adr_present", adr_exists);
@@ -2774,7 +2774,7 @@ static bool build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *
     yyjson_mut_obj_add_bool(doc, root, "artifact_present", has_artifact);
     if (persistence && has_artifact) {
         yyjson_mut_obj_add_str(doc, root, "artifact_hint",
-                               "Persistent artifact written to .codebase-memory/graph.db.zst. "
+                               "Persistent artifact written to .code-intel-memory/graph.db.zst. "
                                "Commit this file to share the index with teammates.");
     }
 
@@ -4335,7 +4335,7 @@ static void adr_list_sections_from_content(yyjson_mut_doc *doc, yyjson_mut_val *
     yyjson_mut_obj_add_val(doc, root_obj, "sections", sections);
 }
 
-/* Read the legacy file-based ADR (<root>/.codebase-memory/adr.md), used by
+/* Read the legacy file-based ADR (<root>/.code-intel-memory/adr.md), used by
  * older versions. Returns a heap buffer (caller frees) or NULL if missing/
  * empty. Kept only to migrate old ADRs into the store (#256). */
 static char *adr_read_legacy_file(const char *root_path) {
@@ -4343,7 +4343,7 @@ static char *adr_read_legacy_file(const char *root_path) {
         return NULL;
     }
     char adr_path[CBM_SZ_4K];
-    snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", root_path);
+    snprintf(adr_path, sizeof(adr_path), "%s/.code-intel-memory/adr.md", root_path);
     FILE *fp = fopen(adr_path, "r");
     if (!fp) {
         return NULL;
@@ -4399,7 +4399,7 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     }
 
     /* One-time migration: older versions wrote ADRs to a file at
-     * <root>/.codebase-memory/adr.md. If the store has no ADR yet but that
+     * <root>/.code-intel-memory/adr.md. If the store has no ADR yet but that
      * legacy file exists, import it so nothing is lost on upgrade. */
     cbm_adr_t adr;
     memset(&adr, 0, sizeof(adr));
@@ -4645,7 +4645,7 @@ static void maybe_auto_index(cbm_mcp_server_t *srv) {
 
     if (!auto_index) {
         cbm_log_info("autoindex.skip", "reason", "disabled", "hint",
-                     "run: codebase-memory-mcp config set auto_index true");
+                     "run: code-intel-memory config set auto_index true");
         return;
     }
 
@@ -4679,7 +4679,7 @@ static void maybe_auto_index(cbm_mcp_server_t *srv) {
 
 /* ── Background update check ──────────────────────────────────── */
 
-#define UPDATE_CHECK_URL "https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest"
+#define UPDATE_CHECK_URL "https://api.github.com/repos/heurema/code-intel-memory/releases/latest"
 
 static void *update_check_thread(void *arg) {
     cbm_mcp_server_t *srv = (cbm_mcp_server_t *)arg;
@@ -4720,9 +4720,9 @@ static void *update_check_thread(void *arg) {
         const char *current = cbm_cli_get_version();
         if (cbm_compare_versions(tag_str, current) > 0) {
             snprintf(srv->update_notice, sizeof(srv->update_notice),
-                     "Update available: %s -> %s -- run: codebase-memory-mcp update  |  "
-                     "Enjoying codebase-memory-mcp? Please leave a star: "
-                     "https://github.com/DeusData/codebase-memory-mcp",
+                     "Update available: %s -> %s -- run: code-intel-memory update  |  "
+                     "Enjoying code-intel-memory? Please leave a star: "
+                     "https://github.com/heurema/code-intel-memory",
                      current, tag_str);
             cbm_log_info("update.available", "current", current, "latest", tag_str);
         }

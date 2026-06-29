@@ -38,6 +38,16 @@ enum {
 #define PP_FIELD_HINT_CONF 0.85
 enum { PP_CSHARP_M_PREFIX_LEN = 2 };
 
+/* The slab allocator installs process-global tree-sitter allocator callbacks,
+ * while ownership tracking is thread-local. That combination can route frees
+ * for slab-backed parser memory through the wrong thread state in production
+ * parallel extraction, causing macOS malloc aborts on parser cleanup. Keep the
+ * code available for targeted allocator experiments, but default production to
+ * the process-wide mimalloc binding installed by cbm_alloc_init(). */
+#ifndef CBM_ENABLE_TS_SLAB_ALLOCATOR
+#define CBM_ENABLE_TS_SLAB_ALLOCATOR 0
+#endif
+
 /* Source-retention caps for the parallel pipeline. The extract worker
  * copies source bytes into result->arena so the fused cross-file LSP
  * step in resolve_worker can run without re-reading from disk. Bound
@@ -671,12 +681,16 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
          * for parsing. This prevents unbounded memory accumulation and works
          * identically on macOS, Linux, and Windows. */
         cbm_destroy_thread_parser();
+#if CBM_ENABLE_TS_SLAB_ALLOCATOR
         cbm_slab_reclaim();
+#endif
         cbm_mem_collect();
     }
 
+#if CBM_ENABLE_TS_SLAB_ALLOCATOR
     /* Final cleanup (parser already destroyed in loop, just slab state) */
     cbm_slab_destroy_thread();
+#endif
     cbm_kind_in_set_free_cache(); /* free this worker thread's node-type bitset cache */
 }
 
@@ -730,8 +744,10 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     CBM_PROF_START(t_init);
     cbm_init();
 
+#if CBM_ENABLE_TS_SLAB_ALLOCATOR
     /* Slab allocator for tree-sitter (thread-safe via TLS). */
     cbm_slab_install();
+#endif
     CBM_PROF_END("parallel_extract", "1_init_libs", t_init);
 
     /* Sub-phase: Sort files by descending size for tail-latency reduction */
@@ -2307,7 +2323,9 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                  * a heap-use-after-free on the next ts_lexer_goto. The next
                  * cbm_extract_file on this thread will recreate the parser. */
                 cbm_destroy_thread_parser();
+#if CBM_ENABLE_TS_SLAB_ALLOCATOR
                 cbm_slab_reclaim();
+#endif
                 uint64_t lsp_elapsed_ns = extract_now_ns() - lsp_t0;
                 atomic_fetch_add_explicit(&rc->time_ns_cross_lsp, lsp_elapsed_ns,
                                           memory_order_relaxed);

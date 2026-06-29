@@ -7,15 +7,12 @@
 # so we upload it as-is — no Jekyll — and only run when the site changes.
 #
 # Requires the repo Pages source to be set to "GitHub Actions"
-# (Settings → Pages → Build and deployment → Source: GitHub Actions).
+# (Settings -> Pages -> Build and deployment -> Source: GitHub Actions).
+# Keep this manual in this fork until Pages is explicitly configured; a normal
+# push must not fail CI just because the repository has no Pages site yet.
 name: Deploy Pages
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:

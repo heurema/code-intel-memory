@@ -58,10 +58,25 @@ static const char *strip_quotes(CBMArena *a, const char *text) {
     return text;
 }
 
+// Callee suffixes for IRIS Python interop string-dispatch. Kept at file scope
+// (not inside the function) to satisfy cppcheck variableScope.
+static const char *s_py_dispatch_suffixes[] = {".classMethodValue", ".classMethodVoid",
+                                               ".classMethodBoolean", ".classMethodObject", NULL};
+
+// Per-language callee-suffix dispatch table — returns a NULL-terminated list of
+// method-name suffixes whose calls should be resolved by extracting class+method
+// from the first two string arguments (e.g. IRIS Python interop). Kept here
+// rather than in CBMLangSpec to avoid -Wmissing-field-initializers across 155
+// language rows.
+const char **cbm_string_dispatch_suffixes(CBMLanguage lang) {
+    if (lang == CBM_LANG_PYTHON) {
+        return s_py_dispatch_suffixes;
+    }
+    return NULL;
+}
+
 // Forward declarations
-static void walk_calls(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec);
 static char *extract_callee_name(CBMArena *a, TSNode node, const char *source, CBMLanguage lang);
-static void extract_jsx_refs(CBMExtractCtx *ctx, TSNode node);
 static char *gotemplate_callee(CBMArena *a, TSNode node, const char *source);
 
 // Lean 4: check if an apply node is inside a type annotation.
@@ -355,6 +370,40 @@ static char *extract_swift_callee(CBMArena *a, TSNode node, const char *source, 
     return NULL;
 }
 
+// A Perl sub/method name is an identifier: it starts with a letter or '_',
+// contains only [A-Za-z0-9_] plus the '::' package separator, and is never a
+// string/config literal. tree-sitter-perl mis-parses config lines in .cgi /
+// heredoc-heavy files into call-shaped nodes whose "callee" is a dotted config
+// token (e.g. "log4perl.appender.File.utf8"); rejecting non-identifier text
+// here stops those from becoming bogus CALLS edges. Any '.', whitespace, quote,
+// or '/' disqualifies the token.
+static bool perl_is_identifier_callee(const char *name) {
+    if (!name || !name[0]) {
+        return false;
+    }
+    unsigned char c0 = (unsigned char)name[0];
+    if (!(isalpha(c0) || c0 == '_')) {
+        return false;
+    }
+    for (const char *p = name; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isalnum(c) || c == '_') {
+            continue;
+        }
+        if (c == ':') {
+            // Only the '::' package separator is allowed: require an adjacent
+            // pair, and reject a lone ':', ':::', or a trailing '::'.
+            if (p[1] != ':' || p[2] == ':' || p[2] == '\0') {
+                return false;
+            }
+            p++; // consume the second ':'; the loop's p++ moves past the pair
+            continue;
+        }
+        return false; // '.', space, quote, '/', etc. → not a sub/method name
+    }
+    return true;
+}
+
 // Callee extraction for scripting languages (Elixir, Perl, PHP, Kotlin, MATLAB).
 static char *extract_scripting_callee(CBMArena *a, TSNode node, const char *source,
                                       CBMLanguage lang, const char *nk) {
@@ -367,7 +416,24 @@ static char *extract_scripting_callee(CBMArena *a, TSNode node, const char *sour
         return NULL;
     }
     if (lang == CBM_LANG_PERL && ts_node_child_count(node) > 0) {
-        return cbm_node_text(a, ts_node_child(node, 0), source);
+        // Pull the actual sub/method name token rather than blindly taking
+        // child(0). Grammar (verified against the vendored parser):
+        //   method_call_expression   : field `method`   ($obj->m / Class->m)
+        //   function_call_expression : field `function` (foo(); name with '.'
+        //                              from a config-string misparse lands here)
+        //   ambiguous_function_call_expression : field `function`
+        //   func1op_call_expression  : builtin keyword as child(0) (no field)
+        TSNode name_node = ts_node_child_by_field_name(node, TS_FIELD("method"));
+        if (ts_node_is_null(name_node)) {
+            name_node = ts_node_child_by_field_name(node, TS_FIELD("function"));
+        }
+        if (ts_node_is_null(name_node)) {
+            name_node = ts_node_child(node, 0);
+        }
+        char *pn = cbm_node_text(a, name_node, source);
+        // Reject anything that is not a bare Perl sub/method identifier (config
+        // strings, quoted literals, paths) so no spurious CALLS edge is emitted.
+        return perl_is_identifier_callee(pn) ? pn : NULL;
     }
     if (lang == CBM_LANG_PHP) {
         TSNode func_node = ts_node_child_by_field_name(node, TS_FIELD("function"));
@@ -684,20 +750,6 @@ static const char *strip_and_validate_string_arg(CBMArena *a, char *text) {
     return text;
 }
 
-// Extract first string argument from a call's arguments node.
-static const char *extract_first_string_arg(CBMExtractCtx *ctx, TSNode args) {
-    uint32_t nc = ts_node_named_child_count(args);
-    for (uint32_t ai = 0; ai < nc && ai < MAX_POSITIONAL_SCAN; ai++) {
-        TSNode arg = ts_node_named_child(args, ai);
-        const char *ak = ts_node_type(arg);
-        if (is_string_like(ak)) {
-            char *text = cbm_node_text(ctx->arena, arg, ctx->source);
-            return strip_and_validate_string_arg(ctx->arena, text);
-        }
-    }
-    return NULL;
-}
-
 // Return the (dequoted) first string-literal child of a node, or NULL.
 static char *gotemplate_string_child(CBMArena *a, TSNode parent, const char *source) {
     TSNode s = cbm_find_child_by_kind(parent, "interpreted_string_literal");
@@ -740,72 +792,21 @@ static char *gotemplate_callee(CBMArena *a, TSNode node, const char *source) {
     return NULL;
 }
 
-// Walk AST for call nodes (iterative)
-static void walk_calls(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec) {
-    TSNodeStack stack;
-    ts_nstack_init(&stack, ctx->arena, CBM_SZ_512);
-    ts_nstack_push(&stack, ctx->arena, root);
-
-    while (stack.count > 0) {
-        TSNode node = ts_nstack_pop(&stack);
-        const char *kind = ts_node_type(node);
-
-        if (cbm_kind_in_set(node, spec->call_node_types)) {
-            char *callee = extract_callee_name(ctx->arena, node, ctx->source, ctx->language);
-            if (callee && callee[0] && !cbm_is_keyword(callee, ctx->language)) {
-                CBMCall call = {0};
-                call.callee_name = callee;
-                call.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
-
-                TSNode args = ts_node_child_by_field_name(node, TS_FIELD("arguments"));
-                if (!ts_node_is_null(args)) {
-                    call.first_string_arg = extract_first_string_arg(ctx, args);
-                }
-                cbm_calls_push(&ctx->result->calls, ctx->arena, call);
+static const char *extract_nth_string_arg(CBMExtractCtx *ctx, TSNode args, uint32_t n) {
+    uint32_t nc = ts_node_named_child_count(args);
+    uint32_t found = 0;
+    for (uint32_t ai = 0; ai < nc && ai < MAX_POSITIONAL_SCAN + n; ai++) {
+        TSNode arg = ts_node_named_child(args, ai);
+        const char *ak = ts_node_type(arg);
+        if (is_string_like(ak)) {
+            if (found == n) {
+                char *text = cbm_node_text(ctx->arena, arg, ctx->source);
+                return strip_and_validate_string_arg(ctx->arena, text);
             }
+            found++;
         }
-
-        if (ctx->language == CBM_LANG_TSX || ctx->language == CBM_LANG_JAVASCRIPT) {
-            if (strcmp(kind, "jsx_self_closing_element") == 0 ||
-                strcmp(kind, "jsx_opening_element") == 0) {
-                extract_jsx_refs(ctx, node);
-            }
-        }
-
-        ts_nstack_push_children(&stack, ctx->arena, node);
     }
-}
-
-// Extract JSX component references (uppercase = component, lowercase = HTML)
-static void extract_jsx_refs(CBMExtractCtx *ctx, TSNode node) {
-    TSNode name_node = ts_node_child_by_field_name(node, TS_FIELD("name"));
-    if (ts_node_is_null(name_node)) {
-        return;
-    }
-
-    char *name = cbm_node_text(ctx->arena, name_node, ctx->source);
-    if (!name || !name[0]) {
-        return;
-    }
-
-    // Only uppercase names are components
-    if (name[0] < 'A' || name[0] > 'Z') {
-        return;
-    }
-
-    CBMCall call = {0};
-    call.callee_name = name;
-    call.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
-    cbm_calls_push(&ctx->result->calls, ctx->arena, call);
-}
-
-void cbm_extract_calls(CBMExtractCtx *ctx) {
-    const CBMLangSpec *spec = cbm_lang_spec(ctx->language);
-    if (!spec || !spec->call_node_types || !spec->call_node_types[0]) {
-        return;
-    }
-
-    walk_calls(ctx, ctx->root, spec);
+    return NULL;
 }
 
 // --- Unified handler: called once per node by the cursor walk ---
@@ -1134,6 +1135,14 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
             call.loop_depth = state->loop_depth;     // enclosing loop nesting at this call
             call.branch_depth = state->branch_depth; // enclosing branch nesting at this call
             call.start_line = (int)ts_node_start_point(node).row + TS_LINE_OFFSET;
+            // Perl-only: flag arrow/method calls ($obj->m / Class->m). The
+            // generic short-name resolver cannot place a method without a known
+            // receiver type, so the call-resolution pass suppresses those edges.
+            // Default false for every other language (struct is zero-init).
+            if (ctx->language == CBM_LANG_PERL &&
+                strcmp(ts_node_type(node), "method_call_expression") == 0) {
+                call.is_method = true;
+            }
 
             TSNode args = ts_node_child_by_field_name(node, TS_FIELD("arguments"));
             if (!ts_node_is_null(args)) {
@@ -1145,6 +1154,26 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
             }
 
             cbm_calls_push(&ctx->result->calls, ctx->arena, call);
+
+            const char **dispatch_suffixes = cbm_string_dispatch_suffixes(ctx->language);
+            if (dispatch_suffixes && !ts_node_is_null(args)) {
+                const char *cn = call.callee_name;
+                size_t len = cn ? strlen(cn) : 0;
+                for (const char **nm = dispatch_suffixes; *nm; nm++) {
+                    size_t nlen = strlen(*nm);
+                    if (len >= nlen && strcmp(cn + len - nlen, *nm) == 0) {
+                        const char *cls = extract_nth_string_arg(ctx, args, 0);
+                        const char *mth = extract_nth_string_arg(ctx, args, 1);
+                        if (cls && mth) {
+                            CBMCall xcall = {0};
+                            xcall.callee_name = cbm_arena_sprintf(ctx->arena, "%s.%s", cls, mth);
+                            xcall.enclosing_func_qn = call.enclosing_func_qn;
+                            cbm_calls_push(&ctx->result->calls, ctx->arena, xcall);
+                        }
+                        break;
+                    }
+                }
+            }
         }
     }
 

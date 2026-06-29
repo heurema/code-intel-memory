@@ -11,6 +11,7 @@
 #include <yyjson/yyjson.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 /* ══════════════════════════════════════════════════════════════════
  *  JSON-RPC PARSING
@@ -466,6 +467,62 @@ TEST(tool_search_graph_includes_node_properties) {
     PASS();
 }
 
+TEST(tool_search_graph_query_honors_file_pattern_issue552) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    ASSERT_NOT_NULL(st);
+
+    const char *proj = "issue-552";
+    cbm_mcp_server_set_project(srv, proj);
+    cbm_store_upsert_project(st, proj, "/tmp/issue-552");
+
+    cbm_node_t lib_status = {0};
+    lib_status.project = proj;
+    lib_status.label = "Function";
+    lib_status.name = "status";
+    lib_status.qualified_name = "issue-552.src.lib.status";
+    lib_status.file_path = "src/lib/status.c";
+    lib_status.start_line = 1;
+    lib_status.end_line = 3;
+    ASSERT_GT(cbm_store_upsert_node(st, &lib_status), 0);
+
+    cbm_node_t component_status = {0};
+    component_status.project = proj;
+    component_status.label = "Function";
+    component_status.name = "status";
+    component_status.qualified_name = "issue-552.src.components.status";
+    component_status.file_path = "src/components/status.c";
+    component_status.start_line = 1;
+    component_status.end_line = 3;
+    ASSERT_GT(cbm_store_upsert_node(st, &component_status), 0);
+
+    cbm_store_exec(st, "INSERT INTO nodes_fts(nodes_fts) VALUES('delete-all');");
+    ASSERT_EQ(cbm_store_exec(st,
+                             "INSERT INTO nodes_fts(rowid, name, qualified_name, label, "
+                             "file_path) "
+                             "SELECT id, cbm_camel_split(name), qualified_name, label, file_path "
+                             "FROM nodes;"),
+              CBM_STORE_OK);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":552,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"search_graph\","
+             "\"arguments\":{\"project\":\"issue-552\",\"query\":\"status\","
+             "\"file_pattern\":\"src/lib/*\",\"limit\":10}}}");
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "\"search_mode\":\"bm25\""));
+    ASSERT_NOT_NULL(strstr(inner, "\"file_path\":\"src/lib/status.c\""));
+    ASSERT_NULL(strstr(inner, "src/components/status.c"));
+
+    free(inner);
+    free(resp);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
 TEST(tool_query_graph_basic) {
     cbm_mcp_server_t *srv = setup_mcp_with_data();
 
@@ -493,6 +550,30 @@ TEST(tool_index_status_no_project) {
     free(resp);
 
     cbm_mcp_server_free(srv);
+    PASS();
+}
+
+TEST(tool_index_status_includes_git_metadata) {
+    char tmp[256];
+    cbm_mcp_server_t *srv = setup_snippet_server(tmp, sizeof(tmp));
+    ASSERT_NOT_NULL(srv);
+
+    char *resp =
+        cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\","
+                                   "\"params\":{\"name\":\"index_status\","
+                                   "\"arguments\":{\"project\":\"test-project\"}}}");
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "\"root_path\""));
+    ASSERT_NOT_NULL(strstr(inner, "\"git\""));
+    ASSERT_NOT_NULL(strstr(inner, "\"is_git\":false"));
+    ASSERT_NOT_NULL(strstr(inner, "\"root_exists\":true"));
+
+    free(inner);
+    free(resp);
+    cbm_mcp_server_free(srv);
+    cleanup_snippet_dir(tmp);
     PASS();
 }
 
@@ -528,6 +609,103 @@ TEST(tool_trace_missing_function_name) {
     ASSERT_NOT_NULL(strstr(resp, "required"));
     free(resp);
 
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* Regression: two same-named definitions with equal rank must be reported
+ * ambiguous, not silently traced (trace_path previously took nodes[0]). */
+TEST(tool_trace_call_path_ambiguous) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    const char *proj = "amb-proj";
+    cbm_mcp_server_set_project(srv, proj);
+    cbm_store_upsert_project(st, proj, "/tmp/amb");
+    cbm_node_t a = {.project = proj,
+                    .label = "Function",
+                    .name = "amb",
+                    .qualified_name = "amb-proj.a.amb",
+                    .file_path = "a.c",
+                    .start_line = 10,
+                    .end_line = 20};
+    cbm_node_t b = {.project = proj,
+                    .label = "Function",
+                    .name = "amb",
+                    .qualified_name = "amb-proj.b.amb",
+                    .file_path = "b.c",
+                    .start_line = 10,
+                    .end_line = 20}; /* equal span -> genuine tie */
+    ASSERT_GT(cbm_store_upsert_node(st, &a), 0);
+    ASSERT_GT(cbm_store_upsert_node(st, &b), 0);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"trace_call_path\","
+             "\"arguments\":{\"function_name\":\"amb\",\"project\":\"amb-proj\"}}}");
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "ambiguous"));
+    ASSERT_NOT_NULL(strstr(inner, "suggestions"));
+    ASSERT_NULL(strstr(inner, "\"callees\""));
+    free(inner);
+    free(resp);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* Regression: when same-named nodes differ in rank, trace must pick the real
+ * definition (callable, larger body) — NOT nodes[0]. The Module is inserted
+ * first; if trace took nodes[0] the outbound trace would be empty. */
+TEST(tool_trace_call_path_prefers_definition) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    const char *proj = "pref-proj";
+    cbm_mcp_server_set_project(srv, proj);
+    cbm_store_upsert_project(st, proj, "/tmp/pref");
+    /* nodes[0]: the WRONG match (a Module, tiny span), inserted first. */
+    cbm_node_t wrong = {.project = proj,
+                        .label = "Module",
+                        .name = "dup",
+                        .qualified_name = "pref-proj.dup",
+                        .file_path = "dup.x",
+                        .start_line = 1,
+                        .end_line = 1};
+    /* the real definition: a Function with a body. */
+    cbm_node_t def = {.project = proj,
+                      .label = "Function",
+                      .name = "dup",
+                      .qualified_name = "pref-proj.src.dup",
+                      .file_path = "src/dup.c",
+                      .start_line = 10,
+                      .end_line = 50};
+    cbm_node_t callee = {.project = proj,
+                         .label = "Function",
+                         .name = "callee",
+                         .qualified_name = "pref-proj.src.callee",
+                         .file_path = "src/dup.c",
+                         .start_line = 60,
+                         .end_line = 70};
+    ASSERT_GT(cbm_store_upsert_node(st, &wrong), 0);
+    int64_t id_def = cbm_store_upsert_node(st, &def);
+    int64_t id_callee = cbm_store_upsert_node(st, &callee);
+    ASSERT_GT(id_def, 0);
+    ASSERT_GT(id_callee, 0);
+    cbm_edge_t e = {.project = proj, .source_id = id_def, .target_id = id_callee, .type = "CALLS"};
+    cbm_store_insert_edge(st, &e);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":62,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"trace_call_path\",\"arguments\":{\"function_name\":\"dup\","
+             "\"project\":\"pref-proj\",\"direction\":\"outbound\"}}}");
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NULL(strstr(inner, "ambiguous"));
+    /* picked the Function definition -> its outbound CALLS edge to "callee" shows */
+    ASSERT_NOT_NULL(strstr(inner, "callee"));
+    free(inner);
+    free(resp);
     cbm_mcp_server_free(srv);
     PASS();
 }
@@ -1267,6 +1445,31 @@ static char *call_snippet(cbm_mcp_server_t *srv, const char *args_json) {
     return text;
 }
 
+static bool is_valid_json_response(const char *json) {
+    if (!json) {
+        return false;
+    }
+    yyjson_doc *doc = yyjson_read(json, strlen(json), 0);
+    if (!doc) {
+        return false;
+    }
+    yyjson_doc_free(doc);
+    return true;
+}
+
+static bool snippet_source_has_replacement(const char *json) {
+    yyjson_doc *doc = yyjson_read(json, strlen(json), 0);
+    if (!doc) {
+        return false;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *source = yyjson_obj_get(root, "source");
+    const char *source_str = yyjson_get_str(source);
+    bool found = source_str && strstr(source_str, "\xEF\xBF\xBD");
+    yyjson_doc_free(doc);
+    return found;
+}
+
 /* ── TestSnippet_ExactQN ──────────────────────────────────────── */
 
 TEST(snippet_exact_qn) {
@@ -1548,6 +1751,46 @@ TEST(snippet_include_neighbors_enabled) {
     ASSERT_NOT_NULL(strstr(resp, "Run"));
     free(resp);
 
+    cbm_mcp_server_free(srv);
+    cleanup_snippet_dir(tmp);
+    PASS();
+}
+
+/* ── TestSnippet_SourceInvalidUtf8 ────────────────────────────── */
+
+TEST(snippet_source_invalid_utf8) {
+    char tmp[256];
+    cbm_mcp_server_t *srv = setup_snippet_server(tmp, sizeof(tmp));
+    ASSERT_NOT_NULL(srv);
+
+    char src_path[512];
+    snprintf(src_path, sizeof(src_path), "%s/project/main.go", tmp);
+    FILE *fp = fopen(src_path, "wb");
+    ASSERT_NOT_NULL(fp);
+    const unsigned char source[] = {
+        'p',  'a',  'c', 'k', 'a', 'g',  'e',  ' ',  'm',  'a',  'i',  'n', '\n', '\n',
+        'f',  'u',  'n', 'c', ' ', 'H',  'a',  'n',  'd',  'l',  'e',  'R', 'e',  'q',
+        'u',  'e',  's', 't', '(', ')',  ' ',  'e',  'r',  'r',  'o',  'r', ' ',  '{',
+        '\n', '\t', '/', '/', ' ', 0xC0, 0xD4, 0xB7, 0xC2, '\n', '\t', 'r', 'e',  't',
+        'u',  'r',  'n', ' ', 'n', 'i',  'l',  '\n', '}',  '\n'};
+    ASSERT_EQ(fwrite(source, 1, sizeof(source), fp), sizeof(source));
+    ASSERT_EQ(fclose(fp), 0);
+
+    char *raw =
+        cbm_mcp_handle_tool(srv, "get_code_snippet",
+                            "{\"qualified_name\":\"test-project.cmd.server.main.HandleRequest\","
+                            "\"project\":\"test-project\"}");
+    ASSERT_TRUE(is_valid_json_response(raw));
+    char *resp = extract_text_content(raw);
+    ASSERT_NOT_NULL(resp);
+    ASSERT_TRUE(is_valid_json_response(resp));
+    ASSERT_NULL(strstr(resp, "\xC0\xD4"));
+    ASSERT_NOT_NULL(strstr(resp, "HandleRequest"));
+    ASSERT_NOT_NULL(strstr(resp, "return nil"));
+    ASSERT_TRUE(snippet_source_has_replacement(resp));
+
+    free(resp);
+    free(raw);
     cbm_mcp_server_free(srv);
     cleanup_snippet_dir(tmp);
     PASS();
@@ -2038,12 +2281,16 @@ SUITE(mcp) {
     RUN_TEST(tool_unknown_tool);
     RUN_TEST(tool_search_graph_basic);
     RUN_TEST(tool_search_graph_includes_node_properties);
+    RUN_TEST(tool_search_graph_query_honors_file_pattern_issue552);
     RUN_TEST(tool_query_graph_basic);
     RUN_TEST(tool_index_status_no_project);
+    RUN_TEST(tool_index_status_includes_git_metadata);
 
     /* Tool handlers with validation */
     RUN_TEST(tool_trace_call_path_not_found);
     RUN_TEST(tool_trace_missing_function_name);
+    RUN_TEST(tool_trace_call_path_ambiguous);
+    RUN_TEST(tool_trace_call_path_prefers_definition);
     RUN_TEST(tool_delete_project_not_found);
     RUN_TEST(tool_get_architecture_empty);
     RUN_TEST(tool_get_architecture_emits_populated_sections);
@@ -2104,5 +2351,6 @@ SUITE(mcp) {
     RUN_TEST(snippet_auto_resolve_enabled);
     RUN_TEST(snippet_include_neighbors_default);
     RUN_TEST(snippet_include_neighbors_enabled);
+    RUN_TEST(snippet_source_invalid_utf8);
     RUN_TEST(tool_bad_project_name_no_overflow_issue235);
 }

@@ -22,6 +22,8 @@ enum {
      * -> comma + 2 key quotes + colon + 2 value quotes (resp. brackets). */
     PP_JSON_FIELD_OVERHEAD = 6,
     PP_ARGS_MARGIN = 20,
+    /* ,"line":<int> -> comma + key (7) + colon + up to 10 digits + NUL. */
+    PP_LINE_MARGIN = 24,
     PP_LOG_THRESH = 24,
     PP_LOG_INTERVAL = 10,
     PP_TIMER_THRESH = 1000,
@@ -510,7 +512,9 @@ static void insert_def_into_gbuf(extract_worker_state_t *ws, const cbm_file_info
     if (def->route_path && def->route_path[0] != '\0') {
         const char *rm = def->route_method ? def->route_method : "ANY";
         char route_qn[CBM_ROUTE_QN_SIZE];
-        snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", rm, def->route_path);
+        char cpath[CBM_SZ_256];
+        snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", rm,
+                 cbm_route_canon_path(def->route_path, cpath, sizeof(cpath)));
         char rprops[CBM_SZ_256];
         snprintf(rprops, sizeof(rprops), "{\"method\":\"%s\",\"source\":\"decorator\"}", rm);
         int64_t route_id =
@@ -1124,15 +1128,22 @@ static size_t append_args_json(char *buf, size_t bufsize, size_t pos, const CBMC
     pos += (size_t)n;
     for (int i = 0; i < call->arg_count && pos < bufsize - CBM_ARG_JSON_GUARD; i++) {
         const CBMCallArg *a = &call->args[i];
+        size_t mark = pos; /* rollback point (before the separator) */
         if (i > 0 && pos < bufsize - SKIP_ONE) {
             buf[pos++] = ',';
         }
         char expr_buf[CBM_SZ_128];
         sanitize_expr(expr_buf, a->expr);
         n = format_call_arg(buf + pos, bufsize - pos, a, expr_buf);
-        if (n > 0) {
-            pos += (size_t)n;
+        /* snprintf returns the UNtruncated length: if the arg did not fully
+         * fit, advancing pos by n would push it past buf and the buf[pos]
+         * writes below would overflow. Drop the arg whole (atomic field —
+         * keeps the array valid) and stop appending. */
+        if (n <= 0 || (size_t)n >= bufsize - pos) {
+            pos = mark;
+            break;
         }
+        pos += (size_t)n;
     }
     if (pos < bufsize - SKIP_ONE) {
         buf[pos++] = ']';
@@ -1197,6 +1208,13 @@ static void finalize_and_emit(cbm_gbuf_t *gbuf, int64_t src_id, int64_t tgt_id,
                               const char *edge_type, char *props, int n, const CBMCall *call) {
     if (n > 0 && (size_t)n < CBM_SZ_2K - PP_ESC_SPACE) {
         size_t pos = append_args_json(props, CBM_SZ_2K, (size_t)n, call);
+        if (call->start_line > 0 && strcmp(edge_type, "CALLS") == 0 &&
+            pos < CBM_SZ_2K - PP_LINE_MARGIN) {
+            int ln = snprintf(props + pos, CBM_SZ_2K - pos, ",\"line\":%d", call->start_line);
+            if (ln > 0) {
+                pos += (size_t)ln;
+            }
+        }
         if (pos < CBM_SZ_2K - SKIP_ONE) {
             props[pos] = '}';
             props[pos + SKIP_ONE] = '\0';
@@ -1210,12 +1228,15 @@ static int64_t build_service_route(cbm_gbuf_t *gbuf, const char *arg, const char
                                    const char *broker, cbm_svc_kind_t svc) {
     char route_qn[CBM_ROUTE_QN_SIZE];
     const char *prefix;
+    char cpath[CBM_SZ_256];
+    const char *qpath = arg;
     if (svc == CBM_SVC_HTTP) {
         prefix = method ? method : "ANY";
+        qpath = cbm_route_canon_path(arg, cpath, sizeof(cpath));
     } else {
         prefix = broker ? broker : "async";
     }
-    snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", prefix, arg);
+    snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", prefix, qpath);
     char route_props[CBM_SZ_256];
     if (method) {
         snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}", method);
@@ -1291,7 +1312,9 @@ static void emit_route_registration(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *sou
                                     const char **ik, const char **iv, int ic) {
     const char *method = cbm_service_pattern_route_method(call->callee_name);
     char rqn[CBM_ROUTE_QN_SIZE];
-    snprintf(rqn, sizeof(rqn), "__route__%s__%s", method ? method : "ANY", route_path);
+    char cpath[CBM_SZ_256];
+    snprintf(rqn, sizeof(rqn), "__route__%s__%s", method ? method : "ANY",
+             cbm_route_canon_path(route_path, cpath, sizeof(cpath)));
     char rp[CBM_SZ_256];
     snprintf(rp, sizeof(rp), "{\"method\":\"%s\"}", method ? method : "ANY");
     int64_t rid = cbm_gbuf_upsert_node(gbuf, "Route", route_path, rqn, "", 0, 0, rp);
@@ -1384,7 +1407,9 @@ static void detect_url_in_args(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
             continue;
         }
         char route_qn[CBM_ROUTE_QN_SIZE];
-        snprintf(route_qn, sizeof(route_qn), "__route__ANY__%s", norm);
+        char cpath[CBM_SZ_256];
+        snprintf(route_qn, sizeof(route_qn), "__route__ANY__%s",
+                 cbm_route_canon_path(norm, cpath, sizeof(cpath)));
         int64_t route_id = cbm_gbuf_upsert_node(gbuf, "Route", norm, route_qn, "", 0, 0,
                                                 "{\"source\":\"arg_url\"}");
         char esc_c[CBM_SZ_256];
@@ -1709,7 +1734,7 @@ static void lsp_idx_free_key(const char *key, void *value, void *ud) {
 /* Resolve calls for one file and emit CALLS/HTTP_CALLS/ASYNC_CALLS edges. */
 static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CBMFileResult *result,
                                const char *rel, const char *module_qn, const char **imp_keys,
-                               const char **imp_vals, int imp_count) {
+                               const char **imp_vals, int imp_count, CBMLanguage lang) {
     /* Build a per-file hash index of resolved_calls keyed by
      * "caller_qn|callee_short" for O(1) lookup. cbm_pipeline_find_lsp_
      * resolution would otherwise do an O(N) linear scan over
@@ -1818,6 +1843,19 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
         try_field_type_hint(rc, &res, call->callee_name, source_node->id);
         atomic_fetch_add_explicit(&rc->time_ns_rc_hint, extract_now_ns() - _rc_t0,
                                   memory_order_relaxed);
+
+        /* Perl call-graph noise guard (#476), mirroring the sequential pass
+         * (pass_calls.c). Perl has no LSP resolver; for builtins (push/shift/
+         * keys/...) and method calls ($obj->m, unresolved receiver), suppress
+         * only WEAK cross-file short-name matches and keep the high-confidence
+         * same_module / import_map strategies so a genuine same-file or
+         * imported call to a builtin-named sub still resolves. Placed after the
+         * field-type hint so a hint cannot re-introduce a suppressed edge.
+         * Gated to Perl — other languages are unaffected. */
+        if (cbm_perl_suppress_generic_match(lang == CBM_LANG_PERL, call->is_method,
+                                            call->callee_name, res.strategy)) {
+            continue;
+        }
 
         if (!res.qualified_name || res.qualified_name[0] == '\0') {
             if (cbm_service_pattern_route_method(call->callee_name) != NULL) {
@@ -2346,7 +2384,7 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
 
         /* ── CALLS resolution ──────────────────────────────────── */
         _ph_t0 = extract_now_ns();
-        resolve_file_calls(rc, ws, result, rel, module_qn, imp_keys, imp_vals, imp_count);
+        resolve_file_calls(rc, ws, result, rel, module_qn, imp_keys, imp_vals, imp_count, lang);
         atomic_fetch_add_explicit(&rc->time_ns_calls, extract_now_ns() - _ph_t0,
                                   memory_order_relaxed);
 

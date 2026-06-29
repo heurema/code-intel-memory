@@ -3028,7 +3028,7 @@ TEST(tslsp_real_router_chain) {
     PASS();
 }
 
-TEST(tslsp_real_mongoose_model) {
+TEST(tslsp_real_odm_model) {
     CBMFileResult *r = extract_ts("interface Model<T> {\n"
                                   "    create(doc: Partial<T>): Promise<T>;\n"
                                   "    find(filter: Partial<T>): Promise<T[]>;\n"
@@ -4208,7 +4208,7 @@ SUITE(ts_lsp) {
     RUN_TEST(tslsp_real_zustand_store);
     RUN_TEST(tslsp_real_typeorm_repo);
     RUN_TEST(tslsp_real_router_chain);
-    RUN_TEST(tslsp_real_mongoose_model);
+    RUN_TEST(tslsp_real_odm_model);
 
     /* More patterns */
     RUN_TEST(tslsp_iterator_for_of_with_generic);

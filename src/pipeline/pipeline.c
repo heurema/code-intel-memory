@@ -20,6 +20,7 @@ enum { CBM_DIR_PERMS = 0755, PL_RING = 4, PL_RING_MASK = 3, PL_SEQ_PASSES = 6, P
 #include "pipeline/pass_lsp_cross.h"
 #include "pipeline/worker_pool.h"
 #include "graph_buffer/graph_buffer.h"
+#include "git/git_context.h"
 #include "store/store.h"
 #include "discover/discover.h"
 #include "discover/userconfig.h"
@@ -74,6 +75,8 @@ struct cbm_pipeline {
     char *repo_path;
     char *db_path;
     char *project_name;
+    cbm_git_context_t git_ctx;
+    char *branch_qn;
     cbm_index_mode_t mode;
     atomic_int cancelled;
     bool persistence; /* write .codebase-memory/graph.db.zst after indexing */
@@ -90,6 +93,10 @@ struct cbm_pipeline {
 
     /* User-defined extension overrides (loaded once per run) */
     cbm_userconfig_t *userconfig;
+
+    /* Committed graph size at dump time (-1 = dump did not run). #334 gate axis. */
+    int committed_nodes;
+    int committed_edges;
 };
 
 /* ── Global pkgmap (one active pipeline at a time) ─────────────── */
@@ -147,8 +154,12 @@ cbm_pipeline_t *cbm_pipeline_new(const char *repo_path, const char *db_path,
     p->repo_path = strdup(repo_path);
     p->db_path = db_path ? strdup(db_path) : NULL;
     p->project_name = cbm_project_name_from_path(repo_path);
+    (void)cbm_git_context_resolve(repo_path, &p->git_ctx);
+    p->branch_qn = cbm_git_context_branch_qn(p->project_name, &p->git_ctx);
     p->mode = mode;
     p->persistence = false;
+    p->committed_nodes = -1;
+    p->committed_edges = -1;
     atomic_init(&p->cancelled, 0);
 
     return p;
@@ -170,6 +181,8 @@ void cbm_pipeline_free(cbm_pipeline_t *p) {
     cbm_discover_free_excluded(p->excluded_dirs, p->excluded_count);
     p->excluded_dirs = NULL;
     p->excluded_count = 0;
+    free(p->branch_qn);
+    cbm_git_context_free(&p->git_ctx);
     /* gbuf, store, registry freed during/after run */
     /* Defensively free userconfig in case run() was never called or panicked */
     if (p->userconfig) {
@@ -208,6 +221,22 @@ void cbm_pipeline_get_excluded(const cbm_pipeline_t *p, char ***out, int *count)
     }
     if (count) {
         *count = p ? p->excluded_count : 0;
+    }
+}
+
+void cbm_pipeline_get_committed_counts(const cbm_pipeline_t *p, int *nodes, int *edges) {
+    if (nodes) {
+        *nodes = p ? p->committed_nodes : -1;
+    }
+    if (edges) {
+        *edges = p ? p->committed_edges : -1;
+    }
+}
+
+void cbm_pipeline_set_committed_counts(cbm_pipeline_t *p, int nodes, int edges) {
+    if (p) {
+        p->committed_nodes = nodes;
+        p->committed_edges = edges;
     }
 }
 
@@ -261,7 +290,7 @@ static void create_folder_chain(cbm_pipeline_t *p, const char *dir, CBMHashTable
         const char *pqn;
         char *pqn_heap = NULL;
         if (pdir[0] == '\0') {
-            pqn = p->project_name;
+            pqn = p->branch_qn ? p->branch_qn : p->project_name;
         } else {
             pqn_heap = cbm_pipeline_fqn_folder(p->project_name, pdir);
             pqn = pqn_heap;
@@ -289,6 +318,22 @@ static int pass_structure(cbm_pipeline_t *p, const cbm_file_info_t *files, int f
 
     /* Project node */
     cbm_gbuf_upsert_node(p->gbuf, "Project", p->project_name, p->project_name, NULL, 0, 0, "{}");
+    const char *branch_qn = p->branch_qn ? p->branch_qn : p->project_name;
+    const char *branch_name = p->git_ctx.branch ? p->git_ctx.branch : "working-tree";
+    char branch_props[CBM_SZ_2K];
+    const char *branch_props_json = "{}";
+    if (cbm_git_context_props_json(&p->git_ctx, branch_props, sizeof(branch_props)) > 0) {
+        branch_props_json = branch_props;
+    }
+    if (p->branch_qn) {
+        int64_t branch_id = cbm_gbuf_upsert_node(p->gbuf, "Branch", branch_name, branch_qn, NULL, 0,
+                                                 0, branch_props_json);
+        const cbm_gbuf_node_t *project_node = cbm_gbuf_find_by_qn(p->gbuf, p->project_name);
+        if (project_node && branch_id > 0) {
+            cbm_gbuf_insert_edge(p->gbuf, project_node->id, branch_id, "HAS_BRANCH",
+                                 branch_props_json);
+        }
+    }
 
     /* Collect unique directories and create Folder/Package nodes */
     CBMHashTable *seen_dirs = cbm_ht_create(CBM_SZ_256);
@@ -328,7 +373,7 @@ static int pass_structure(cbm_pipeline_t *p, const cbm_file_info_t *files, int f
         const char *parent_qn;
         char *parent_qn_heap = NULL;
         if (dir[0] == '\0') {
-            parent_qn = p->project_name;
+            parent_qn = branch_qn;
         } else {
             parent_qn_heap = cbm_pipeline_fqn_folder(p->project_name, dir);
             parent_qn = parent_qn_heap;
@@ -809,6 +854,12 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
         *last_slash = '\0';
         cbm_mkdir_p(db_dir, CBM_DIR_PERMS);
     }
+    /* Capture committed counts BEFORE the dump. cbm_gbuf_dump_to_sqlite calls
+     * release_gbuf_indexes(), which frees node_by_qn (graph_buffer.c), after
+     * which cbm_gbuf_node_count() returns 0. Reading these post-dump left
+     * committed_nodes at 0, so the #334 plausibility gate never fired. */
+    p->committed_nodes = cbm_gbuf_node_count(p->gbuf);
+    p->committed_edges = cbm_gbuf_edge_count(p->gbuf);
     int rc = cbm_gbuf_dump_to_sqlite(p->gbuf, db_path);
     if (rc != 0) {
         cbm_log_error("pipeline.err", "phase", "dump");
@@ -847,7 +898,13 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
 
     /* Export persistent artifact if enabled */
     if (p->persistence) {
-        cbm_artifact_export(db_path, p->repo_path, p->project_name, CBM_ARTIFACT_BEST);
+        int arc = cbm_artifact_export(db_path, p->repo_path, p->project_name, CBM_ARTIFACT_BEST);
+        if (arc != 0) {
+            const char *err = cbm_artifact_export_last_error();
+            cbm_log_error("pipeline.err", "phase", "artifact_export", "err", err ? err : "unknown");
+            /* A failed persistence export intentionally fails the run; this used to be ignored. */
+            return arc;
+        }
     }
 
     return 0;

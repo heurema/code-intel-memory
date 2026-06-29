@@ -187,8 +187,9 @@ static void handle_route_registration(cbm_pipeline_ctx_t *ctx, const CBMCall *ca
                                       const char **imp_keys, const char **imp_vals, int imp_count) {
     const char *method = cbm_service_pattern_route_method(call->callee_name);
     char route_qn[CBM_ROUTE_QN_SIZE];
+    char cpath[CBM_SZ_256];
     snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", method ? method : "ANY",
-             call->first_string_arg);
+             cbm_route_canon_path(call->first_string_arg, cpath, sizeof(cpath)));
     char route_props[CBM_SZ_256];
     snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}", method ? method : "ANY");
     int64_t route_id = cbm_gbuf_upsert_node(ctx->gbuf, "Route", call->first_string_arg, route_qn,
@@ -225,12 +226,15 @@ static int64_t create_svc_route_node(cbm_pipeline_ctx_t *ctx, const char *url, c
                                      const char *method, const char *broker) {
     char route_qn[CBM_ROUTE_QN_SIZE];
     const char *prefix;
+    char cpath[CBM_SZ_256];
+    const char *qpath = url;
     if (svc == CBM_SVC_HTTP) {
         prefix = method ? method : "ANY";
+        qpath = cbm_route_canon_path(url, cpath, sizeof(cpath));
     } else {
         prefix = broker ? broker : "async";
     }
-    snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", prefix, url);
+    snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", prefix, qpath);
     const char *rp;
     if (svc == CBM_SVC_HTTP) {
         rp = method ? method : "{}";
@@ -238,6 +242,24 @@ static int64_t create_svc_route_node(cbm_pipeline_ctx_t *ctx, const char *url, c
         rp = broker ? broker : "{}";
     }
     return cbm_gbuf_upsert_node(ctx->gbuf, "Route", url, route_qn, "", 0, 0, rp);
+}
+
+/* Insert an edge, splicing the call-site line (,"line":N) in before the closing
+ * brace when one was captured. Mirrors finalize_and_emit() on the parallel path
+ * so CALLS edges carry their source line regardless of resolution path. Restricted
+ * to CALLS: route/config edge props feed full-only predump passes
+ * (create_route_nodes/create_data_flows), so altering them desyncs full vs
+ * incremental indexing. */
+static void calls_emit_edge(cbm_gbuf_t *gbuf, int64_t src, int64_t tgt, const char *type,
+                            char *props, size_t cap, const CBMCall *call) {
+    if (call && call->start_line > 0 && strcmp(type, "CALLS") == 0) {
+        size_t len = strlen(props);
+        if (len >= SKIP_ONE && props[len - SKIP_ONE] == '}' && len + CBM_SZ_32 < cap) {
+            snprintf(props + len - SKIP_ONE, cap - (len - SKIP_ONE), ",\"line\":%d}",
+                     call->start_line);
+        }
+    }
+    cbm_gbuf_insert_edge(gbuf, src, tgt, type, props);
 }
 
 static void emit_http_async_edge(cbm_pipeline_ctx_t *ctx, const CBMCall *call,
@@ -256,7 +278,7 @@ static void emit_http_async_edge(cbm_pipeline_ctx_t *ctx, const CBMCall *call,
                  "{\"callee\":\"%s\",\"confidence\":%.2f,\"strategy\":\"%s\",\"candidates\":%d}",
                  esc_callee, res->confidence, res->strategy ? res->strategy : "unknown",
                  res->candidate_count);
-        cbm_gbuf_insert_edge(ctx->gbuf, source->id, target->id, "CALLS", props);
+        calls_emit_edge(ctx->gbuf, source->id, target->id, "CALLS", props, sizeof(props), call);
         return;
     }
     const char *edge_type = (svc == CBM_SVC_HTTP) ? "HTTP_CALLS" : "ASYNC_CALLS";
@@ -279,7 +301,7 @@ static void emit_http_async_edge(cbm_pipeline_ctx_t *ctx, const CBMCall *call,
             snprintf(props + plen - 1, sizeof(props) - plen + SKIP_ONE, "\"}");
         }
     }
-    cbm_gbuf_insert_edge(ctx->gbuf, source->id, route_id, edge_type, props);
+    calls_emit_edge(ctx->gbuf, source->id, route_id, edge_type, props, sizeof(props), call);
 }
 
 /* Classify a resolved call and emit the appropriate edge. */
@@ -304,7 +326,8 @@ static void emit_classified_edge(cbm_pipeline_ctx_t *ctx, const CBMCall *call,
         char props[CBM_SZ_512];
         snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"key\":\"%s\",\"confidence\":%.2f}",
                  esc_c, esc_k, res->confidence);
-        cbm_gbuf_insert_edge(ctx->gbuf, source->id, target->id, "CONFIGURES", props);
+        calls_emit_edge(ctx->gbuf, source->id, target->id, "CONFIGURES", props, sizeof(props),
+                        call);
         return;
     }
     char esc_c2[CBM_SZ_256];
@@ -314,7 +337,7 @@ static void emit_classified_edge(cbm_pipeline_ctx_t *ctx, const CBMCall *call,
              "{\"callee\":\"%s\",\"confidence\":%.2f,\"strategy\":\"%s\",\"candidates\":%d}",
              esc_c2, res->confidence, res->strategy ? res->strategy : "unknown",
              res->candidate_count);
-    cbm_gbuf_insert_edge(ctx->gbuf, source->id, target->id, "CALLS", props);
+    calls_emit_edge(ctx->gbuf, source->id, target->id, "CALLS", props, sizeof(props), call);
 }
 
 /* Find source node for a call: enclosing function or file node. */
@@ -336,7 +359,7 @@ static const cbm_gbuf_node_t *calls_find_source(cbm_pipeline_ctx_t *ctx, const c
 static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
                                const CBMResolvedCallArray *lsp_calls, const char *rel,
                                const char *module_qn, const char **imp_keys, const char **imp_vals,
-                               int imp_count) {
+                               int imp_count, CBMLanguage lang) {
     const cbm_gbuf_node_t *source_node = calls_find_source(ctx, rel, call->enclosing_func_qn);
     if (!source_node) {
         return 0;
@@ -364,6 +387,19 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
     cbm_resolution_t res = cbm_registry_resolve(ctx->registry, call->callee_name, module_qn,
                                                 imp_keys, imp_vals, imp_count);
     if (!res.qualified_name || res.qualified_name[0] == '\0') {
+        return 0;
+    }
+
+    /* Perl call-graph noise guard (#476). Perl has no LSP resolver, so the
+     * generic registry chain is the only resolver; for builtins (push/shift/
+     * keys/...) and method calls ($obj->m with an unresolved receiver), a *weak*
+     * cross-file short-name match to a project sub sharing the name is almost
+     * always a false positive. Suppress only those weak matches; KEEP the
+     * high-confidence same_module / import_map strategies so a genuine
+     * same-file or imported call to a builtin-named sub still resolves. Gated
+     * to Perl — other languages are unaffected. */
+    if (cbm_perl_suppress_generic_match(lang == CBM_LANG_PERL, call->is_method, call->callee_name,
+                                        res.strategy)) {
         return 0;
     }
     const cbm_gbuf_node_t *target_node = cbm_gbuf_find_by_qn(ctx->gbuf, res.qualified_name);
@@ -440,7 +476,7 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
             }
             total_calls++;
             if (resolve_single_call(ctx, call, &result->resolved_calls, rel, module_qn, imp_keys,
-                                    imp_vals, imp_count)) {
+                                    imp_vals, imp_count, files[i].language)) {
                 resolved++;
             } else {
                 unresolved++;

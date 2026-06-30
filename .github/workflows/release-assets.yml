@@ -1,0 +1,162 @@
+# Assets-only GitHub release for fork bootstrap.
+#
+# This intentionally publishes GitHub Release binaries only. It does not
+# publish npm, PyPI, Chocolatey, Scoop, Homebrew, Winget, or MCP Registry
+# packages. Use release.yml when registry publishing credentials are available.
+name: Release Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v0.8.1)"
+        required: true
+        type: string
+      release_notes:
+        description: "Release notes (optional; generated from commits if empty)"
+        required: false
+        type: string
+      replace:
+        description: "Replace existing release and tag if present"
+        required: false
+        type: boolean
+        default: false
+      draft:
+        description: "Create as draft instead of publishing"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build.yml
+    with:
+      version: ${{ inputs.version }}
+
+  release-assets:
+    needs: [build]
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -la *.tar.gz *.zip
+
+      - name: Generate checksums
+        run: sha256sum *.tar.gz *.zip > checksums.txt
+
+      - name: Generate SBOM
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+
+          version = os.environ["VERSION"]
+          sbom = {
+              "spdxVersion": "SPDX-2.3",
+              "dataLicense": "CC0-1.0",
+              "SPDXID": "SPDXRef-DOCUMENT",
+              "name": f"code-intel-memory-{version}",
+              "documentNamespace": f"https://github.com/heurema/code-intel-memory/releases/{version}",
+              "creationInfo": {
+                  "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "creators": ["Tool: code-intel-memory-assets-release"],
+              },
+              "packages": [
+                  {"SPDXID": "SPDXRef-Package-sqlite3", "name": "sqlite3", "versionInfo": "3.51.3", "licenseDeclared": "blessing", "downloadLocation": "https://sqlite.org", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-yyjson", "name": "yyjson", "versionInfo": "0.12.0", "licenseDeclared": "MIT", "downloadLocation": "https://github.com/ibireme/yyjson", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-mimalloc", "name": "mimalloc", "versionInfo": "3.3.2", "licenseDeclared": "MIT", "downloadLocation": "https://github.com/microsoft/mimalloc", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-xxhash", "name": "xxhash", "versionInfo": "0.8.3", "licenseDeclared": "BSD-2-Clause", "downloadLocation": "https://github.com/Cyan4973/xxHash", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-tre", "name": "tre", "versionInfo": "0.8.0", "licenseDeclared": "BSD-2-Clause", "downloadLocation": "https://github.com/laurikari/tre", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-tree-sitter", "name": "tree-sitter", "versionInfo": "0.24.4", "licenseDeclared": "MIT", "downloadLocation": "https://github.com/tree-sitter/tree-sitter", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-lz4", "name": "lz4", "versionInfo": "1.10.0", "licenseDeclared": "BSD-2-Clause", "downloadLocation": "https://github.com/lz4/lz4", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-zstd", "name": "zstd", "versionInfo": "1.5.7", "licenseDeclared": "BSD-3-Clause", "downloadLocation": "https://github.com/facebook/zstd", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-simplecpp", "name": "simplecpp", "versionInfo": "1.x", "licenseDeclared": "0BSD", "downloadLocation": "https://github.com/danmar/simplecpp", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-verstable", "name": "verstable", "versionInfo": "2.2.1", "licenseDeclared": "MIT", "downloadLocation": "https://github.com/JacksonAllan/Verstable", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-wyhash", "name": "wyhash", "versionInfo": "final-4.3", "licenseDeclared": "Unlicense", "downloadLocation": "https://github.com/wangyi-fudan/wyhash", "filesAnalyzed": False},
+                  {"SPDXID": "SPDXRef-Package-nomic-embed-code", "name": "nomic-embed-code-token-embeddings", "versionInfo": "1.0", "licenseDeclared": "Apache-2.0", "downloadLocation": "https://huggingface.co/nomic-ai/nomic-embed-code", "filesAnalyzed": False, "comment": "Derived int8 token embeddings; see vendored/nomic/NOTICE"},
+                  {"SPDXID": "SPDXRef-Package-tree-sitter-grammars", "name": "tree-sitter-grammars-aggregate", "versionInfo": "158-grammars", "licenseDeclared": "MIT", "downloadLocation": "NOASSERTION", "filesAnalyzed": False, "comment": "Aggregate of 158 vendored tree-sitter grammars. Predominantly MIT; exceptions: clojure CC0-1.0, jinja2 + just Apache-2.0, first-party grammars (c) DeusData MIT. Per-grammar provenance: internal/cbm/vendored/grammars/MANIFEST.md; full texts ship in THIRD_PARTY_NOTICES.md inside each archive."},
+              ],
+          }
+          with open("sbom.json", "w", encoding="utf-8") as f:
+              json.dump(sbom, f, indent=2)
+          PY
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: '*.tar.gz,*.zip,checksums.txt'
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: '*.tar.gz'
+          sbom-path: 'sbom.json'
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign assets
+        run: |
+          for f in *.tar.gz *.zip checksums.txt; do
+            cosign sign-blob --yes --bundle "${f}.bundle" "$f"
+          done
+
+      - name: Delete existing release
+        if: ${{ inputs.replace }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: gh release delete "$VERSION" --yes --cleanup-tag || true
+
+      - name: Create release tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git tag -f "$VERSION" "$GITHUB_SHA"
+          git push origin "$VERSION" --force
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          release_args=()
+          if [ "$DRAFT" = "true" ]; then
+            release_args+=(--draft)
+          fi
+
+          if [ -n "$RELEASE_NOTES" ]; then
+            printf '%s\n' "$RELEASE_NOTES" > release_notes.md
+            release_args+=(--notes-file release_notes.md)
+          else
+            release_args+=(--generate-notes)
+          fi
+
+          gh release create "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            "${release_args[@]}" \
+            *.tar.gz \
+            *.zip \
+            checksums.txt \
+            sbom.json \
+            *.bundle
